@@ -19,7 +19,7 @@ st.set_page_config(
 )
 
 # ══════════════════════════════════════════════════════════════════════════════
-#  CSS (mismo estilo, solo cambiamos el color del acento a un tono más neutro)
+#  CSS
 # ══════════════════════════════════════════════════════════════════════════════
 st.markdown("""
 <style>
@@ -216,8 +216,8 @@ def _build_expert_prompt(energy_type: str, preds, future_dates, lat, lon, years,
     # Common stats
     avg_val = float(arr.mean())
     max_val = float(arr.max())
-    total_energy = float(arr.sum()) / 1000.0  # kWh/m² (solar) or kWh/m² (wind power density)
-    productive_hrs = int((arr > 0.5).sum())   # >0.5 m/s or >0.5 W/m²
+    total_energy = float(arr.sum()) / 1000.0
+    productive_hrs = int((arr > 0.5).sum())
 
     # Hourly profile
     by_hour: dict = {}
@@ -319,25 +319,22 @@ SMART BEHAVIOR
 """
 
     else:  # Wind
-        wind_speed = arr  # m/s
+        wind_speed = arr
         avg_ws = avg_val
         max_ws = max_val
-        # Wind power density: 0.5 * rho * v^3, rho=1.225 kg/m³
         rho = 1.225
         power_density = 0.5 * rho * (wind_speed ** 3)
         avg_pd = float(power_density.mean())
-        total_energy_wh = power_density.sum()  # Wh/m²
+        total_energy_wh = power_density.sum()
         total_energy_kwh = total_energy_wh / 1000
 
-        # Wind resource classification (simplified)
         if avg_ws >= 7.5: resource = "excellent (class 7) – ideal for large turbines"
         elif avg_ws >= 6.0: resource = "good (class 5–6) – viable for utility-scale"
         elif avg_ws >= 4.5: resource = "moderate (class 3–4) – suitable for small turbines"
         elif avg_ws >= 3.0: resource = "marginal (class 2) – limited, hybrid systems"
         else: resource = "poor (class 1) – not recommended for standalone wind"
 
-        # Capacity factor estimate (simplified)
-        cf_est = min(0.45, max(0.05, (avg_ws - 3) / 12))  # rough
+        cf_est = min(0.45, max(0.05, (avg_ws - 3) / 12))
         fc = cf_est * 100
 
         pico_idx = int(arr.argmax())
@@ -422,7 +419,7 @@ def _call_sowi(system: str, history: list) -> str:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-#  QUICK PROMPTS (adaptadas para ambos tipos)
+#  QUICK PROMPTS
 # ══════════════════════════════════════════════════════════════════════════════
 
 QUICK = [
@@ -442,7 +439,7 @@ QUICK = [
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-#  RENDER: METRICS (dinámicas según energy_type)
+#  RENDER: METRICS
 # ══════════════════════════════════════════════════════════════════════════════
 
 def _render_metrics(preds, future_dates, energy_type, modo):
@@ -658,7 +655,7 @@ def _render_sidebar(has_data: bool, energy_type: str):
 
 def main():
     has_data = st.session_state.get("modelo_ejecutado", False)
-    energy_type = st.session_state.get("energy_type", "Solar")  # default to Solar if missing
+    energy_type = st.session_state.get("energy_type", "Solar")
     _render_sidebar(has_data, energy_type)
 
     # Hero
@@ -691,11 +688,10 @@ def main():
         st.markdown("<br>", unsafe_allow_html=True)
         _, cc, _ = st.columns([1,2,1])
         with cc:
-            # CORREGIDO: ahora apunta al archivo principal "Energy Forecast.py"
+            # CORRECTED: now points to the main file "Energy Forecast.py"
             try:
                 st.page_link("Energy Forecast.py", label="⚡ Go to Forecast →", icon="🌞", use_container_width=True)
             except Exception:
-                # Fallback: enlace HTML directo a la raíz de la app
                 st.markdown("""
                 <a href="/" target="_self" style="display: block; text-align: center; background: linear-gradient(135deg, rgba(245,180,50,.18), rgba(245,180,50,.08)); border: 1px solid rgba(245,180,50,.38); color: #f5b432; font-family: 'Sora', sans-serif; font-weight: 600; padding: 0.5rem 1rem; border-radius: 12px; text-decoration: none; transition: all 0.18s;">⚡ Go to Forecast →</a>
                 """, unsafe_allow_html=True)
