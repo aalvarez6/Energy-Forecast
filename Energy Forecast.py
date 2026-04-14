@@ -1,6 +1,7 @@
 """
 Renewable Energy Forecast — Energy Forecast.py
 Solar & Wind Forecast with Open-Meteo + LSTM
+FIXED VERSION — bugs corregidos y optimizado
 """
 
 _SOWI_AI_PAGE = "pages/Sowi AI Analyst.py"
@@ -27,7 +28,7 @@ st.set_page_config(
 )
 
 # ══════════════════════════════════════════════════════════════════════════════
-# CSS (raw string to avoid f-string brace issues)
+# CSS
 # ══════════════════════════════════════════════════════════════════════════════
 st.markdown(r"""
 <style>
@@ -46,7 +47,7 @@ html,body,[class*="css"]{ font-family:var(--font)!important; }
 .stApp { background:var(--bg0)!important; }
 [data-testid="stAppViewContainer"] {
   background-color:var(--bg0);
-  background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 400 400' opacity='0.04'%3E%3Cg transform='translate(60,60)'%3E%3Crect x='-4' y='0' width='8' height='50' fill='%238899bb'/%3E%3Cpath d='M0,0 L-6,-30 L0,-40 L6,-30 Z' fill='%238899bb'/%3E%3Cpath d='M0,0 L-30,-6 L-40,0 L-30,6 Z' fill='%238899bb'/%3E%3Cpath d='M0,0 L6,30 L0,40 L-6,30 Z' fill='%238899bb'/%3E%3C/g%3E%3Cg transform='translate(280,100)'%3E%3Crect x='-25' y='-15' width='50' height='30' rx='4' fill='%23f5b432'/%3E%3Cline x1='-25' y1='-5' x2='25' y2='-5' stroke='%23c47a1a' stroke-width='1.5'/%3E%3Cline x1='-25' y1='5' x2='25' y2='5' stroke='%23c47a1a' stroke-width='1.5'/%3E%3Crect x='-4' y='15' width='8' height='20' fill='%238899bb'/%3E%3C/g%3E%3Cg transform='translate(180,280)'%3E%3Crect x='-3' y='0' width='6' height='40' fill='%238899bb'/%3E%3Cpath d='M0,0 L-5,-24 L0,-32 L5,-24 Z' fill='%238899bb'/%3E%3Cpath d='M0,0 L-24,-5 L-32,0 L-24,5 Z' fill='%238899bb'/%3E%3Cpath d='M0,0 L5,24 L0,32 L-5,24 Z' fill='%238899bb'/%3E%3C/g%3E%3Cg transform='translate(80,240)'%3E%3Crect x='-20' y='-12' width='40' height='24' rx='3' fill='%23f5b432'/%3E%3Cline x1='-20' y1='-4' x2='20' y2='-4' stroke='%23c47a1a' stroke-width='1'/%3E%3Cline x1='-20' y1='4' x2='20' y2='4' stroke='%23c47a1a' stroke-width='1'/%3E%3Crect x='-3' y='12' width='6' height='15' fill='%238899bb'/%3E%3C/g%3E%3C/svg%3E");
+  background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 400 400' opacity='0.04'%3E%3Cg transform='translate(60,60)'%3E%3Crect x='-4' y='0' width='8' height='50' fill='%238899bb'/%3E%3Cpath d='M0,0 L-6,-30 L0,-40 L6,-30 Z' fill='%238899bb'/%3E%3Cpath d='M0,0 L-30,-6 L-40,0 L-30,6 Z' fill='%238899bb'/%3E%3Cpath d='M0,0 L6,30 L0,40 L-6,30 Z' fill='%238899bb'/%3E%3C/g%3E%3Cg transform='translate(280,100)'%3E%3Crect x='-25' y='-15' width='50' height='30' rx='4' fill='%23f5b432'/%3E%3Cline x1='-25' y1='-5' x2='25' y2='-5' stroke='%23c47a1a' stroke-width='1.5'/%3E%3Cline x1='-25' y1='5' x2='25' y2='5' stroke='%23c47a1a' stroke-width='1.5'/%3E%3Crect x='-4' y='15' width='8' height='20' fill='%238899bb'/%3E%3C/g%3E%3C/svg%3E");
   background-repeat:repeat; background-size:400px 400px;
 }
 .block-container { background:rgba(10,10,20,0.93);border-radius:var(--rl);padding:0 2rem 3rem!important;max-width:1120px!important;margin:0 auto!important; }
@@ -112,7 +113,8 @@ h1,h2,h3,h4{ font-family:var(--font)!important;color:var(--t1)!important; }
 # ══════════════════════════════════════════════════════════════════════════════
 @st.cache_data(show_spinner=False, ttl=86400)
 def geocode(query: str):
-    headers = {"User-Agent": "RenewableEnergyForecast/2.0"}
+    # FIX #17: User-Agent más descriptivo con placeholder de email (configurable)
+    headers = {"User-Agent": "RenewableEnergyForecast/2.0 (contact@example.com)"}
     for lang in ["en", "es", ""]:
         try:
             params = {"q": query, "format": "json", "limit": 1, "addressdetails": 1}
@@ -138,8 +140,9 @@ def solar_window(lat_deg: float, date: datetime):
     B    = math.radians((360 / 365) * (doy - 81))
     decl = math.radians(23.45 * math.sin(B))
     cos_ha = -math.tan(lat) * math.tan(decl)
-    if cos_ha < -1: return 0.0, 24.0
-    if cos_ha >  1: return 0.0, 0.0
+    # FIX #7: usar sentinels para latitudes polares
+    if cos_ha < -1: return 0.0, 24.0   # midnight sun — siempre de día
+    if cos_ha >  1: return None, None  # polar night — siempre de noche
     ha = math.degrees(math.acos(cos_ha))
     return 12.0 - ha / 15.0, 12.0 + ha / 15.0
 
@@ -148,6 +151,10 @@ def apply_solar_mask(preds: np.ndarray, dates: list, lat: float) -> np.ndarray:
     out = preds.copy().astype(float)
     for i, dt in enumerate(dates):
         sr, ss = solar_window(lat, dt)
+        # FIX #7: manejar polar night (None, None)
+        if sr is None:
+            out[i] = 0.0
+            continue
         h = dt.hour + dt.minute / 60.0
         if not (sr - 0.5 <= h <= ss + 0.5):
             out[i] = 0.0
@@ -197,8 +204,14 @@ class LSTMMultivariate(nn.Module):
 # ══════════════════════════════════════════════════════════════════════════════
 # Open-Meteo data fetching
 # ══════════════════════════════════════════════════════════════════════════════
+
+# FIX #11: función helper para redondear coordenadas antes de cachear
+def _round_coords(lat: float, lon: float, decimals: int = 2):
+    return round(lat, decimals), round(lon, decimals)
+
 @st.cache_data(ttl=3600, show_spinner=False)
 def load_openmeteo_data(lat, lon, start_date, end_date, energy_type="Solar"):
+    # FIX #11: coordenadas ya vienen redondeadas desde el caller
     cache_session = requests_cache.CachedSession('.cache', expire_after=3600)
     retry_session = retry(cache_session, retries=5, backoff_factor=0.2)
     openmeteo     = openmeteo_requests.Client(session=retry_session)
@@ -227,7 +240,8 @@ def load_openmeteo_data(lat, lon, start_date, end_date, energy_type="Solar"):
         start_dt = datetime.fromtimestamp(hourly.Time(), tz=tz).replace(tzinfo=None)
         dates    = [start_dt + timedelta(hours=i) for i in range(n)]
         df = pd.DataFrame({"Datetime": dates, **hv}).set_index("Datetime").sort_index()
-        df = df.ffill().fillna(0)          # ← fixed deprecated method
+        # FIX #3: sort_index + ffill + fillna correctos para pandas ≥ 2.0
+        df = df.sort_index().ffill().fillna(0)
         df[df < 0] = 0
         return df
     except Exception as e:
@@ -240,13 +254,15 @@ def load_openmeteo_data(lat, lon, start_date, end_date, energy_type="Solar"):
 def make_seed_sequence_solar(df, seq_len, lat):
     if not len(df):
         return np.zeros(seq_len)
-    # last 24 hours (daytime only)
     last_day = df.index[-1].date()
     prev_day = last_day - timedelta(days=1)
     recent = df[df.index.date >= prev_day]
     vals = []
     for dt, row in recent.iterrows():
         sr, ss = solar_window(lat, dt)
+        # FIX #7: manejar polar night
+        if sr is None:
+            continue
         h = dt.hour + dt.minute / 60.0
         if sr - 0.5 <= h <= ss + 0.5:
             vals.append(float(row["shortwave_radiation"]))
@@ -267,8 +283,9 @@ def make_seed_sequence_wind(df, seq_len):
     return arr[-seq_len:]
 
 
+# FIX #4: forecast empieza 1 hora después del último dato, no al día siguiente
 def make_future_dates(last_dt, n_steps):
-    cursor = (last_dt + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+    cursor = last_dt + timedelta(hours=1)
     dates  = []
     while len(dates) < n_steps:
         dates.append(cursor)
@@ -283,7 +300,8 @@ def normalize_data(data):
 
 def normalize_features(df):
     means = df.mean()
-    stds = df.std().replace(0, 1)
+    # FIX #9: .std() con N=1 da NaN, necesitamos fillna además de replace
+    stds = df.std().replace(0, 1).fillna(1)
     return (df - means) / stds, means, stds
 
 
@@ -303,49 +321,77 @@ def create_sequences_mv(features, target, seq_len):
     return np.array(s), np.array(t)
 
 
-def train_model(model, X, y, epochs, pb, lr=0.005):
+# FIX #12: mini-batch training para datasets grandes
+def train_model(model, X, y, epochs, pb, lr=0.005, batch_size=256):
     opt    = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=1e-5)
     sched  = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=epochs)
     fn     = nn.HuberLoss()
     losses = []
+    n_samples = X.shape[0]
+
     for e in range(epochs):
         model.train()
-        opt.zero_grad()
-        loss = fn(model(X).squeeze(), y)
-        loss.backward()
-        opt.step()
+        epoch_loss = 0.0
+        # shuffle indices
+        perm = torch.randperm(n_samples)
+        n_batches = max(1, n_samples // batch_size)
+
+        for b in range(n_batches):
+            idx = perm[b * batch_size : (b + 1) * batch_size]
+            Xb, yb = X[idx], y[idx]
+            opt.zero_grad()
+            loss = fn(model(Xb).squeeze(), yb)
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+            opt.step()
+            epoch_loss += loss.item()
+
         sched.step()
-        losses.append(loss.item())
+        losses.append(epoch_loss / n_batches)
         pb.progress((e + 1) / epochs)
     return model, losses
 
 
-def predict_univariate(model, seed, n, m, s):
+# FIX #1: predict_univariate — seed siempre 1D, manejo correcto de shapes
+def predict_univariate(model, seed_1d: torch.Tensor, n, m, s):
+    """
+    seed_1d: shape [seq_len] — tensor 1D con valores normalizados
+    """
     model.eval()
     preds = []
-    cur = seed.clone()
+    # cur es siempre 1D: [seq_len]
+    cur = seed_1d.clone().float()
     with torch.no_grad():
         for _ in range(n):
-            o = model(cur.view(1, -1, 1))
-            val = o.item()
+            # view a [1, seq_len, 1] para el LSTM
+            inp = cur.view(1, -1, 1)
+            val = model(inp).item()
             preds.append(val)
-            # Append new value as tensor on same device
-            new_val = torch.tensor([[val]], device=cur.device, dtype=cur.dtype)
+            # desplazar ventana: eliminar primero, añadir al final
+            new_val = torch.tensor([val], dtype=cur.dtype)
             cur = torch.cat((cur[1:], new_val), dim=0)
     return np.array(preds) * s + m
 
 
-def predict_multivariate(model, seed, n, target_m, target_s):
+# FIX #2: predict_multivariate — seed con shape correcto, inferencia honesta
+def predict_multivariate(model, seed_mv: torch.Tensor, n, target_m, target_s):
+    """
+    seed_mv: shape [seq_len, n_features] — últimos seq_len pasos con todas las features.
+    En modo iterativo, solo se actualiza la feature target (índice 0);
+    las demás features se mantienen constantes (limitación inherente sin forecast externo).
+    """
     model.eval()
     preds = []
-    cur = seed.clone()
+    cur = seed_mv.clone().float()  # [seq_len, n_features]
     with torch.no_grad():
         for _ in range(n):
-            v = model(cur.unsqueeze(0)).item()
+            inp = cur.unsqueeze(0)  # [1, seq_len, n_features]
+            v = model(inp).item()
             preds.append(v)
-            ns = cur[-1].clone()
-            ns[0] = v
-            cur = torch.cat((cur[1:], ns.unsqueeze(0)), dim=0)
+            # nueva fila: copiar la última fila y actualizar solo la target feature
+            new_row = cur[-1].clone()
+            new_row[0] = v
+            cur = torch.cat((cur[1:], new_row.unsqueeze(0)), dim=0)
     return np.array(preds) * target_s + target_m
 
 
@@ -387,12 +433,18 @@ alt.themes.enable("dark")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# Flat-prediction warning helper
+# FIX #14: Flat-prediction warning más inteligente
 # ══════════════════════════════════════════════════════════════════════════════
 def check_flat_prediction(preds: np.ndarray, label: str = "prediction") -> None:
-    if preds.std() < 0.05 * (preds.max() - preds.min() + 1e-8):
+    # Solo verificar en valores positivos para evitar falsos positivos nocturnos (solar)
+    positive = preds[preds > 1.0]
+    if len(positive) < 3:
+        return  # no hay suficientes valores para evaluar varianza
+    rng = positive.max() - positive.min()
+    if rng > 1e-6 and positive.std() < 0.05 * rng:
         st.warning(
-            f"⚠️ The {label} looks unusually flat (std ≈ {preds.std():.3f}). "
+            f"⚠️ The {label} looks unusually flat during productive hours "
+            f"(std ≈ {positive.std():.3f}). "
             "This can happen with very short training or when the model converges "
             "to the training mean. Try **more epochs**, a **longer data range**, "
             "or switch to **Day-Ahead** mode for better variance."
@@ -403,6 +455,11 @@ def check_flat_prediction(preds: np.ndarray, label: str = "prediction") -> None:
 # Solar dashboard
 # ══════════════════════════════════════════════════════════════════════════════
 def render_solar_dashboard(df, predictions, future_dates, lat):
+    # FIX #8: validar columna antes de usar
+    if "shortwave_radiation" not in df.columns:
+        st.error("❌ El DataFrame no contiene datos solares. Asegúrate de correr el modelo en modo Solar.")
+        return predictions
+
     preds  = np.clip(predictions, 0, None)
     hp     = int((preds > 50).sum())
     ekwh   = preds.sum() / 1000
@@ -488,9 +545,14 @@ def render_solar_dashboard(df, predictions, future_dates, lat):
 
     with t1:
         sr, ss = solar_window(lat, future_dates[0] if future_dates else datetime.today())
+        # FIX #7: manejar polar night en display
+        if sr is None:
+            window_str = "Polar night — no solar window"
+        else:
+            window_str = f"<b style='color:#f5b432'>{sr:.1f}h – {ss:.1f}h</b> (local time)"
         st.markdown(
             f'<div class="chart-desc"><strong>Hourly forecast.</strong> Solar window: '
-            f'<b style="color:#f5b432">{sr:.1f}h – {ss:.1f}h</b> (local time).</div>',
+            f'{window_str}.</div>',
             unsafe_allow_html=True)
         area = alt.Chart(pd2).mark_area(
             line={"color": "#f5b432", "strokeWidth": 2},
@@ -542,17 +604,21 @@ def render_solar_dashboard(df, predictions, future_dates, lat):
     st.subheader("📋 Solar Hourly Profile")
     hist_h = df["shortwave_radiation"].groupby(df.index.hour).mean()
     pred_h = pd.DataFrame({"h": [d.hour for d in future_dates], "GHI": preds}).groupby("h")["GHI"].mean()
-    sr, ss = solar_window(lat, future_dates[0] if future_dates else datetime.today())
+    sr_ref, ss_ref = solar_window(lat, future_dates[0] if future_dates else datetime.today())
     rows = []
     for h in range(24):
         hv = float(hist_h.get(h, 0))
         pv = float(pred_h.get(h, 0))
         av = (hv + pv) / 2 if pv else hv
-        period = ("🌙 Night"     if h < sr - .5 or h > ss + .5 else
-                  "🌅 Dawn"      if h <= sr + 1 else
-                  "☀️ Morning"   if h <= 11 else
-                  "🔆 Solar noon" if h <= 13 else
-                  "🌤️ Afternoon" if h <= ss - 1 else "🌇 Twilight")
+        # FIX #7: manejar polar night en tabla
+        if sr_ref is None:
+            period = "🌙 Polar Night"
+        else:
+            period = ("🌙 Night"      if h < sr_ref - .5 or h > ss_ref + .5 else
+                      "🌅 Dawn"       if h <= sr_ref + 1 else
+                      "☀️ Morning"    if h <= 11 else
+                      "🔆 Solar noon" if h <= 13 else
+                      "🌤️ Afternoon"  if h <= ss_ref - 1 else "🌇 Twilight")
         rows.append({"Hour": f"{h:02d}:00",
                      "Hist GHI (W/m²)":     round(max(hv, 0), 1),
                      "Forecast GHI (W/m²)": round(max(pv, 0), 1),
@@ -572,6 +638,11 @@ def render_solar_dashboard(df, predictions, future_dates, lat):
 # Wind dashboard — GREEN theme
 # ══════════════════════════════════════════════════════════════════════════════
 def render_wind_dashboard(df, predictions, future_dates):
+    # FIX #8: validar columna
+    if "wind_speed_10m" not in df.columns:
+        st.error("❌ El DataFrame no contiene datos de viento. Asegúrate de correr el modelo en modo Wind.")
+        return predictions
+
     GC  = "#22c55e"
     GCd = "rgba(34,197,94,.30)"
 
@@ -890,7 +961,7 @@ with st.sidebar:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# Hero  — plain string concat, zero f-string CSS brace risk
+# Hero
 # ══════════════════════════════════════════════════════════════════════════════
 hero_color    = "#f5b432" if energy_type == "Solar" else "#22c55e"
 hero_subtitle = ("Solar irradiance prediction with LSTM" if energy_type == "Solar"
@@ -924,16 +995,24 @@ with col_info:
 
     if energy_type == "Solar":
         sr_now, ss_now = solar_window(lat, datetime.today())
-        rise_str = f"{int(sr_now):02d}:{int((sr_now % 1) * 60):02d}"
-        set_str  = f"{int(ss_now):02d}:{int((ss_now % 1) * 60):02d}"
-        sun_rows = (
-            f"<div style='display:flex;justify-content:space-between;font-size:.78rem'>"
-            f"<span style='color:#44445a'>Sunrise</span>"
-            f"<span style='color:{accent};font-weight:600'>{rise_str} h</span></div>"
-            f"<div style='display:flex;justify-content:space-between;font-size:.78rem'>"
-            f"<span style='color:#44445a'>Sunset</span>"
-            f"<span style='color:{accent};font-weight:600'>{set_str} h</span></div>"
-        )
+        # FIX #7: manejar polar night en info panel
+        if sr_now is None:
+            sun_rows = (
+                "<div style='display:flex;justify-content:space-between;font-size:.78rem'>"
+                f"<span style='color:#44445a'>Solar window</span>"
+                f"<span style='color:#8899bb;font-weight:600'>Polar night</span></div>"
+            )
+        else:
+            rise_str = f"{int(sr_now):02d}:{int((sr_now % 1) * 60):02d}"
+            set_str  = f"{int(ss_now):02d}:{int((ss_now % 1) * 60):02d}"
+            sun_rows = (
+                f"<div style='display:flex;justify-content:space-between;font-size:.78rem'>"
+                f"<span style='color:#44445a'>Sunrise</span>"
+                f"<span style='color:{accent};font-weight:600'>{rise_str} h</span></div>"
+                f"<div style='display:flex;justify-content:space-between;font-size:.78rem'>"
+                f"<span style='color:#44445a'>Sunset</span>"
+                f"<span style='color:{accent};font-weight:600'>{set_str} h</span></div>"
+            )
     else:
         sun_rows = ""
 
@@ -978,10 +1057,13 @@ st.markdown("<br>", unsafe_allow_html=True)
 if run:
     st.session_state["modelo_ejecutado"] = False
 
+    # FIX #11: redondear coordenadas antes de cachear
+    lat_c, lon_c = _round_coords(lat, lon)
+
     with st.spinner("🛰️ Fetching historical data from Open-Meteo…"):
         st.caption(f"📅 {date_start} → {date_end}  |  Lat {lat:.4f}° Lon {lon:.4f}°")
         try:
-            df = load_openmeteo_data(lat, lon, date_start, date_end, energy_type)
+            df = load_openmeteo_data(lat_c, lon_c, date_start, date_end, energy_type)
         except RuntimeError as e:
             st.error(str(e))
             st.stop()
@@ -1006,15 +1088,19 @@ if run:
                 data = df[target_col].values.ravel()
                 dn, m, s = normalize_data(data)
                 X, y = create_sequences(dn, seq_len)
-                X = torch.FloatTensor(X).view(-1, seq_len, 1)
+                # FIX #6: shape explícita sin view redundante
+                X = torch.FloatTensor(X)   # [N, seq_len]
+                X = X.unsqueeze(-1)        # [N, seq_len, 1]
                 y = torch.FloatTensor(y).view(-1)
                 model = LSTMPredictor()
                 pb = st.progress(0)
                 model, _ = train_model(model, X, y, epochs, pb)
             st.success("✅ Model trained")
-            seed_n = (make_seed_sequence_solar(df, seq_len, lat) - m) / (s or 1)
+            # FIX #1: seed como tensor 1D
+            seed_np = make_seed_sequence_solar(df, seq_len, lat)
+            seed_n  = (seed_np - m) / (s or 1)
             predictions = predict_univariate(
-                model, torch.FloatTensor(seed_n).view(-1, 1), pred_steps, m, s)
+                model, torch.FloatTensor(seed_n), pred_steps, m, s)
 
         elif modo == "Day-Ahead":
             st.markdown(
@@ -1025,7 +1111,7 @@ if run:
                 data = df[target_col].values.ravel()
                 dn, m, s = normalize_data(data)
                 X, y = create_sequences(dn, seq_len)
-                X = torch.FloatTensor(X).view(-1, seq_len, 1)
+                X = torch.FloatTensor(X).unsqueeze(-1)
                 y = torch.FloatTensor(y).view(-1)
                 model = StackedLSTMDayAhead(input_size=1, hidden_sizes=da_hidden_sizes)
                 pb = st.progress(0)
@@ -1038,9 +1124,10 @@ if run:
                     .encode(x="Epoch:Q", y=alt.Y("Loss:Q", title="Huber Loss"))
                     .properties(height=200).interactive(),
                     use_container_width=True)
-            seed_n = (make_seed_sequence_solar(df, seq_len, lat) - m) / (s or 1)
+            seed_np = make_seed_sequence_solar(df, seq_len, lat)
+            seed_n  = (seed_np - m) / (s or 1)
             predictions = predict_univariate(
-                model, torch.FloatTensor(seed_n).view(-1, 1), pred_steps, m, s)
+                model, torch.FloatTensor(seed_n), pred_steps, m, s)
 
         elif modo == "Multivariable":
             feature_cols = [target_col]
@@ -1061,15 +1148,18 @@ if run:
                 fa = df_n.values
                 ta = df_n[target_col].values
                 X, y = create_sequences_mv(fa, ta, seq_len)
-                X = torch.FloatTensor(X).view(-1, seq_len, len(feature_cols))
+                # FIX #6: shape ya es [N, seq_len, n_features], no necesita view
+                X = torch.FloatTensor(X)
                 y = torch.FloatTensor(y).view(-1)
                 model = LSTMMultivariate(input_size=len(feature_cols))
                 pb = st.progress(0)
                 model, _ = train_model(model, X, y, epochs, pb)
             st.success("✅ Multivariable model trained")
+            # FIX #2: seed con shape [seq_len, n_features]
+            seed_mv = torch.FloatTensor(fa[-seq_len:])  # [seq_len, n_features]
             predictions = predict_multivariate(
-                model, torch.FloatTensor(fa[-seq_len:]), pred_steps,
-                medias[target_col], desv[target_col])
+                model, seed_mv, pred_steps,
+                float(medias[target_col]), float(desv[target_col]))
 
         min_len = min(len(predictions), len(future_dates))
         predictions, future_dates = predictions[:min_len], future_dates[:min_len]
@@ -1087,15 +1177,16 @@ if run:
                 data = df[target_col].values.ravel()
                 dn, m, s = normalize_data(data)
                 X, y = create_sequences(dn, seq_len)
-                X = torch.FloatTensor(X).view(-1, seq_len, 1)
+                X = torch.FloatTensor(X).unsqueeze(-1)
                 y = torch.FloatTensor(y).view(-1)
                 model = LSTMPredictor()
                 pb = st.progress(0)
                 model, _ = train_model(model, X, y, epochs, pb)
             st.success("✅ Wind model trained")
-            seed_n = (make_seed_sequence_wind(df, seq_len) - m) / (s or 1)
+            seed_np = make_seed_sequence_wind(df, seq_len)
+            seed_n  = (seed_np - m) / (s or 1)
             predictions = predict_univariate(
-                model, torch.FloatTensor(seed_n).view(-1, 1), pred_steps, m, s)
+                model, torch.FloatTensor(seed_n), pred_steps, m, s)
 
         elif modo == "Day-Ahead":
             st.markdown(
@@ -1106,7 +1197,7 @@ if run:
                 data = df[target_col].values.ravel()
                 dn, m, s = normalize_data(data)
                 X, y = create_sequences(dn, seq_len)
-                X = torch.FloatTensor(X).view(-1, seq_len, 1)
+                X = torch.FloatTensor(X).unsqueeze(-1)
                 y = torch.FloatTensor(y).view(-1)
                 model = StackedLSTMDayAhead(input_size=1, hidden_sizes=da_hidden_sizes)
                 pb = st.progress(0)
@@ -1119,9 +1210,10 @@ if run:
                     .encode(x="Epoch:Q", y=alt.Y("Loss:Q", title="Huber Loss"))
                     .properties(height=200).interactive(),
                     use_container_width=True)
-            seed_n = (make_seed_sequence_wind(df, seq_len) - m) / (s or 1)
+            seed_np = make_seed_sequence_wind(df, seq_len)
+            seed_n  = (seed_np - m) / (s or 1)
             predictions = predict_univariate(
-                model, torch.FloatTensor(seed_n).view(-1, 1), pred_steps, m, s)
+                model, torch.FloatTensor(seed_n), pred_steps, m, s)
 
         elif modo == "Multivariable":
             feature_cols = [target_col]
@@ -1140,15 +1232,17 @@ if run:
                 fa = df_n.values
                 ta = df_n[target_col].values
                 X, y = create_sequences_mv(fa, ta, seq_len)
-                X = torch.FloatTensor(X).view(-1, seq_len, len(feature_cols))
+                X = torch.FloatTensor(X)
                 y = torch.FloatTensor(y).view(-1)
                 model = LSTMMultivariate(input_size=len(feature_cols))
                 pb = st.progress(0)
                 model, _ = train_model(model, X, y, epochs, pb)
             st.success("✅ Multivariable wind model trained")
+            # FIX #2
+            seed_mv = torch.FloatTensor(fa[-seq_len:])
             predictions = predict_multivariate(
-                model, torch.FloatTensor(fa[-seq_len:]), pred_steps,
-                medias[target_col], desv[target_col])
+                model, seed_mv, pred_steps,
+                float(medias[target_col]), float(desv[target_col]))
 
         predictions = np.clip(predictions, 0, None)
         min_len = min(len(predictions), len(future_dates))
