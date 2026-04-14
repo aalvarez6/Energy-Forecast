@@ -1,5 +1,5 @@
 """
-Renewable Energy Forecast — energy_forecast.py
+Renewable Energy Forecast — Energy Forecast.py
 Solar & Wind Forecast with Open-Meteo + LSTM
 """
 
@@ -27,7 +27,7 @@ st.set_page_config(
 )
 
 # ══════════════════════════════════════════════════════════════════════════════
-# CSS — raw string so CSS braces are never mistaken for f-string variables
+# CSS (raw string to avoid f-string brace issues)
 # ══════════════════════════════════════════════════════════════════════════════
 st.markdown(r"""
 <style>
@@ -80,7 +80,6 @@ h1,h2,h3,h4{ font-family:var(--font)!important;color:var(--t1)!important; }
 [data-testid="stProgressBar"]>div>div{ background:linear-gradient(90deg,var(--amber),var(--warn))!important;border-radius:var(--pill)!important; }
 [data-testid="stProgressBar"]>div{ background:var(--surface3)!important;border-radius:var(--pill)!important; }
 .stSpinner>div{ border-top-color:var(--amber)!important; }
-/* Hero */
 .page-hero{ padding:2.2rem 0 1.6rem;border-bottom:1px solid var(--bd);margin-bottom:1.6rem; }
 .page-eyebrow{ display:inline-flex;align-items:center;gap:7px;border:1px solid rgba(245,180,50,.2);background:rgba(245,180,50,.06);color:var(--amber);font-size:.67rem;font-weight:600;letter-spacing:.12em;text-transform:uppercase;padding:5px 14px;border-radius:var(--pill);margin-bottom:.9rem; }
 .ldot{ width:5px;height:5px;background:var(--amber);border-radius:50%;animation:ldot 2.4s ease-in-out infinite; }
@@ -88,7 +87,6 @@ h1,h2,h3,h4{ font-family:var(--font)!important;color:var(--t1)!important; }
 .page-title{ font-size:clamp(1.9rem,4.5vw,3rem);font-weight:700;color:var(--t1);letter-spacing:-.045em;line-height:1.06;margin:0 0 .5rem; }
 .page-sub{ font-size:.95rem;color:var(--t2);font-weight:300; }
 .wave-sep{ height:1px;background:linear-gradient(90deg,transparent,rgba(245,180,50,.25) 35%,rgba(136,153,187,.2) 65%,transparent);margin:.3rem 0 1.6rem; }
-/* Metric cards */
 .pred-metrics{ display:grid;grid-template-columns:repeat(4,1fr);gap:9px;margin-bottom:1.4rem; }
 .pm{ background:var(--surface);border:1px solid var(--bd);border-radius:var(--r);padding:.9rem 1rem;position:relative;overflow:hidden;transition:border-color .2s,transform .18s; }
 .pm:hover{ border-color:var(--bd-hi);transform:translateY(-2px); }
@@ -99,7 +97,6 @@ h1,h2,h3,h4{ font-family:var(--font)!important;color:var(--t1)!important; }
 .pm-unit{ font-size:.65rem;color:var(--t2);font-weight:400; }
 .pm-tag{ display:inline-block;font-size:.6rem;font-weight:600;padding:2px 7px;border-radius:var(--pill);margin-top:4px; }
 .tag-solar{ background:var(--amber-dim);color:var(--amber); } .tag-wind{ background:var(--green-dim);color:var(--green); }
-/* Chart desc */
 .chart-desc{ background:var(--surface);border-left:3px solid var(--amber);border-radius:0 var(--r) var(--r) 0;padding:.6rem 1rem;margin-bottom:.9rem;font-size:.77rem;color:var(--t2);line-height:1.55; }
 .chart-desc-wind{ background:var(--surface);border-left:3px solid var(--green);border-radius:0 var(--r) var(--r) 0;padding:.6rem 1rem;margin-bottom:.9rem;font-size:.77rem;color:var(--t2);line-height:1.55; }
 .status-banner{ background:var(--surface);border:1px solid var(--bd);border-radius:var(--r);padding:.5rem 1rem;font-size:.78rem;color:var(--t1);margin-bottom:1rem; }
@@ -230,7 +227,7 @@ def load_openmeteo_data(lat, lon, start_date, end_date, energy_type="Solar"):
         start_dt = datetime.fromtimestamp(hourly.Time(), tz=tz).replace(tzinfo=None)
         dates    = [start_dt + timedelta(hours=i) for i in range(n)]
         df = pd.DataFrame({"Datetime": dates, **hv}).set_index("Datetime").sort_index()
-        df = df.fillna(method="ffill").fillna(0)
+        df = df.ffill().fillna(0)          # ← fixed deprecated method
         df[df < 0] = 0
         return df
     except Exception as e:
@@ -241,22 +238,32 @@ def load_openmeteo_data(lat, lon, start_date, end_date, energy_type="Solar"):
 # Helpers
 # ══════════════════════════════════════════════════════════════════════════════
 def make_seed_sequence_solar(df, seq_len, lat):
-    if not len(df): return np.zeros(seq_len)
-    recent = df[df.index.date >= df.index[-1].date() - timedelta(days=1)]
-    vals = [float(r["shortwave_radiation"]) for dt, r in recent.iterrows()
-            if (lambda sr, ss, h: sr - .5 <= h <= ss + .5)(
-                *solar_window(lat, dt), dt.hour + dt.minute / 60)]
+    if not len(df):
+        return np.zeros(seq_len)
+    # last 24 hours (daytime only)
+    last_day = df.index[-1].date()
+    prev_day = last_day - timedelta(days=1)
+    recent = df[df.index.date >= prev_day]
+    vals = []
+    for dt, row in recent.iterrows():
+        sr, ss = solar_window(lat, dt)
+        h = dt.hour + dt.minute / 60.0
+        if sr - 0.5 <= h <= ss + 0.5:
+            vals.append(float(row["shortwave_radiation"]))
     arr = np.array(vals, dtype=float)
-    if not len(arr): arr = df["shortwave_radiation"].values[-seq_len:].astype(float)
-    if len(arr) < seq_len: arr = np.concatenate([np.zeros(seq_len - len(arr)), arr])
+    if len(arr) == 0:
+        arr = df["shortwave_radiation"].values[-seq_len:].astype(float)
+    if len(arr) < seq_len:
+        arr = np.concatenate([np.zeros(seq_len - len(arr)), arr])
     return arr[-seq_len:]
 
 
 def make_seed_sequence_wind(df, seq_len):
-    """Use the last seq_len hours of actual wind data as seed — preserves variance."""
-    if not len(df): return np.zeros(seq_len)
+    if not len(df):
+        return np.zeros(seq_len)
     arr = df["wind_speed_10m"].values[-seq_len:].astype(float)
-    if len(arr) < seq_len: arr = np.concatenate([np.zeros(seq_len - len(arr)), arr])
+    if len(arr) < seq_len:
+        arr = np.concatenate([np.zeros(seq_len - len(arr)), arr])
     return arr[-seq_len:]
 
 
@@ -264,7 +271,8 @@ def make_future_dates(last_dt, n_steps):
     cursor = (last_dt + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
     dates  = []
     while len(dates) < n_steps:
-        dates.append(cursor); cursor += timedelta(hours=1)
+        dates.append(cursor)
+        cursor += timedelta(hours=1)
     return dates
 
 
@@ -274,21 +282,24 @@ def normalize_data(data):
 
 
 def normalize_features(df):
-    means = df.mean(); stds = df.std().replace(0, 1)
+    means = df.mean()
+    stds = df.std().replace(0, 1)
     return (df - means) / stds, means, stds
 
 
 def create_sequences(data, seq_len):
     s, t = [], []
     for i in range(len(data) - seq_len):
-        s.append(data[i:i + seq_len]); t.append(data[i + seq_len])
+        s.append(data[i:i + seq_len])
+        t.append(data[i + seq_len])
     return np.array(s), np.array(t)
 
 
 def create_sequences_mv(features, target, seq_len):
     s, t = [], []
     for i in range(len(features) - seq_len):
-        s.append(features[i:i + seq_len]); t.append(target[i + seq_len])
+        s.append(features[i:i + seq_len])
+        t.append(target[i + seq_len])
     return np.array(s), np.array(t)
 
 
@@ -298,35 +309,43 @@ def train_model(model, X, y, epochs, pb, lr=0.005):
     fn     = nn.HuberLoss()
     losses = []
     for e in range(epochs):
-        model.train(); opt.zero_grad()
+        model.train()
+        opt.zero_grad()
         loss = fn(model(X).squeeze(), y)
-        loss.backward(); opt.step(); sched.step()
-        losses.append(loss.item()); pb.progress((e + 1) / epochs)
+        loss.backward()
+        opt.step()
+        sched.step()
+        losses.append(loss.item())
+        pb.progress((e + 1) / epochs)
     return model, losses
 
 
 def predict_univariate(model, seed, n, m, s):
-    """
-    Auto-regressive prediction with light noise injection to avoid mean collapse.
-    """
-    model.eval(); preds = []; cur = seed.clone()
+    model.eval()
+    preds = []
+    cur = seed.clone()
     with torch.no_grad():
         for _ in range(n):
             o = model(cur.view(1, -1, 1))
             val = o.item()
             preds.append(val)
-            cur = torch.cat((cur[1:], torch.tensor([[val]])), 0)
-    arr = np.array(preds) * s + m
-    return arr
+            # Append new value as tensor on same device
+            new_val = torch.tensor([[val]], device=cur.device, dtype=cur.dtype)
+            cur = torch.cat((cur[1:], new_val), dim=0)
+    return np.array(preds) * s + m
 
 
 def predict_multivariate(model, seed, n, target_m, target_s):
-    model.eval(); preds = []; cur = seed.clone()
+    model.eval()
+    preds = []
+    cur = seed.clone()
     with torch.no_grad():
         for _ in range(n):
-            v = model(cur.unsqueeze(0)).item(); preds.append(v)
-            ns = cur[-1].clone(); ns[0] = v
-            cur = torch.cat((cur[1:], ns.unsqueeze(0)), 0)
+            v = model(cur.unsqueeze(0)).item()
+            preds.append(v)
+            ns = cur[-1].clone()
+            ns[0] = v
+            cur = torch.cat((cur[1:], ns.unsqueeze(0)), dim=0)
     return np.array(preds) * target_s + target_m
 
 
@@ -335,9 +354,9 @@ def predict_multivariate(model, seed, n, target_m, target_s):
 # ══════════════════════════════════════════════════════════════════════════════
 def render_map(lat, lon):
     st.markdown(
-        "<div style='font-size:.68rem;color:#8888a0;margin-bottom:4px'>"
-        "📌 Lat <b style='color:#f5b432'>" + f"{lat:.4f}" + "°</b>&nbsp;|&nbsp;"
-        "Lon <b style='color:#f5b432'>" + f"{lon:.4f}" + "°</b></div>",
+        f"<div style='font-size:.68rem;color:#8888a0;margin-bottom:4px'>"
+        f"📌 Lat <b style='color:#f5b432'>{lat:.4f}°</b>&nbsp;|&nbsp;"
+        f"Lon <b style='color:#f5b432'>{lon:.4f}°</b></div>",
         unsafe_allow_html=True)
     try:
         st.map(pd.DataFrame({"lat": [lat], "lon": [lon]}),
@@ -371,7 +390,6 @@ alt.themes.enable("dark")
 # Flat-prediction warning helper
 # ══════════════════════════════════════════════════════════════════════════════
 def check_flat_prediction(preds: np.ndarray, label: str = "prediction") -> None:
-    """Warn the user if the model collapsed to a near-constant output."""
     if preds.std() < 0.05 * (preds.max() - preds.min() + 1e-8):
         st.warning(
             f"⚠️ The {label} looks unusually flat (std ≈ {preds.std():.3f}). "
@@ -395,28 +413,28 @@ def render_solar_dashboard(df, predictions, future_dates, lat):
 
     check_flat_prediction(preds, "solar GHI forecast")
 
-    # Metric cards — plain string concat to avoid CSS brace conflicts
     st.markdown(
-        '<div class="pred-metrics">'
-        '<div class="pm pm-solar"><div class="pm-lbl">🌞 Avg GHI</div>'
-        '<div class="pm-val">' + f"{mean_w:.1f}" + '<span class="pm-unit"> W/m²</span><br>'
-        '<span style="font-size:.8rem">(' + f"{mean_k:.3f}" + ' kW/m²)</span></div>'
-        '<span class="pm-tag tag-solar">' + cal + '</span></div>'
-        '<div class="pm pm-solar"><div class="pm-lbl">📈 Max GHI</div>'
-        '<div class="pm-val">' + f"{preds.max():.1f}" + '<span class="pm-unit"> W/m²</span></div>'
-        '<span class="pm-tag tag-solar">Peak forecast</span></div>'
-        '<div class="pm pm-solar"><div class="pm-lbl">⚡ Total Energy</div>'
-        '<div class="pm-val">' + f"{ekwh:.3f}" + '<span class="pm-unit"> kWh/m²</span></div>'
-        '<span class="pm-tag tag-solar">Accumulated</span></div>'
-        '<div class="pm pm-solar"><div class="pm-lbl">⏱️ Productive Hours</div>'
-        '<div class="pm-val">' + str(hp) + '<span class="pm-unit"> h</span></div>'
-        '<span class="pm-tag tag-solar">GHI &gt; 50 W/m²</span></div>'
-        '</div>', unsafe_allow_html=True)
+        f'<div class="pred-metrics">'
+        f'<div class="pm pm-solar"><div class="pm-lbl">🌞 Avg GHI</div>'
+        f'<div class="pm-val">{mean_w:.1f}<span class="pm-unit"> W/m²</span><br>'
+        f'<span style="font-size:.8rem">({mean_k:.3f} kW/m²)</span></div>'
+        f'<span class="pm-tag tag-solar">{cal}</span></div>'
+        f'<div class="pm pm-solar"><div class="pm-lbl">📈 Max GHI</div>'
+        f'<div class="pm-val">{preds.max():.1f}<span class="pm-unit"> W/m²</span></div>'
+        f'<span class="pm-tag tag-solar">Peak forecast</span></div>'
+        f'<div class="pm pm-solar"><div class="pm-lbl">⚡ Total Energy</div>'
+        f'<div class="pm-val">{ekwh:.3f}<span class="pm-unit"> kWh/m²</span></div>'
+        f'<span class="pm-tag tag-solar">Accumulated</span></div>'
+        f'<div class="pm pm-solar"><div class="pm-lbl">⏱️ Productive Hours</div>'
+        f'<div class="pm-val">{hp}<span class="pm-unit"> h</span></div>'
+        f'<span class="pm-tag tag-solar">GHI &gt; 50 W/m²</span></div>'
+        f'</div>', unsafe_allow_html=True)
 
     # Chart 1 — last 24h + forecast
     st.subheader("📊 Last 24h + Forecast")
     if len(df) >= 24:
-        tmp    = df.tail(24).reset_index(); tmp.columns = ["Datetime"] + list(tmp.columns[1:])
+        tmp = df.tail(24).reset_index()
+        tmp.columns = ["Datetime"] + list(tmp.columns[1:])
         last24 = tmp[["Datetime", "shortwave_radiation"]].rename(
             columns={"shortwave_radiation": "GHI"})
         last24["Type"] = "Historical (last 24h)"
@@ -441,15 +459,18 @@ def render_solar_dashboard(df, predictions, future_dates, lat):
 
     # Chart 2 — historical range selector
     st.subheader("📊 Historical GHI")
-    df_r = df.reset_index(); dcol = df_r.columns[0]
+    df_r = df.reset_index()
+    dcol = df_r.columns[0]
     hall = df_r[[dcol, "shortwave_radiation"]].copy()
     hall.columns = ["Datetime", "GHI"]
     mn_d, mx_d = hall["Datetime"].min().date(), hall["Datetime"].max().date()
     c1, c2 = st.columns(2)
-    with c1: fi = st.date_input("From", value=max(mn_d, mx_d - timedelta(days=3)),
-                                min_value=mn_d, max_value=mx_d, key="hd1_solar")
-    with c2: ff = st.date_input("To",   value=mx_d,
-                                min_value=mn_d, max_value=mx_d, key="hd2_solar")
+    with c1:
+        fi = st.date_input("From", value=max(mn_d, mx_d - timedelta(days=3)),
+                           min_value=mn_d, max_value=mx_d, key="hd1_solar")
+    with c2:
+        ff = st.date_input("To", value=mx_d,
+                           min_value=mn_d, max_value=mx_d, key="hd2_solar")
     hf = hall[(hall["Datetime"].dt.date >= fi) & (hall["Datetime"].dt.date <= ff)]
     st.altair_chart(
         alt.Chart(hf).mark_line(strokeWidth=1.5, color="#8899bb").encode(
@@ -461,15 +482,15 @@ def render_solar_dashboard(df, predictions, future_dates, lat):
 
     # Tabs
     st.subheader("📊 Forecast Analysis")
-    pd2     = pd.DataFrame({"Hour": future_dates, "GHI": preds,
-                             "Hour_num": [d.hour for d in future_dates]})
+    pd2 = pd.DataFrame({"Hour": future_dates, "GHI": preds,
+                        "Hour_num": [d.hour for d in future_dates]})
     t1, t2, t3 = st.tabs(["🌡️ Irradiance curve", "📅 Avg by hour", "📈 Distribution"])
 
     with t1:
         sr, ss = solar_window(lat, future_dates[0] if future_dates else datetime.today())
         st.markdown(
-            '<div class="chart-desc"><strong>Hourly forecast.</strong> Solar window: '
-            '<b style="color:#f5b432">' + f"{sr:.1f}h – {ss:.1f}h" + '</b> (local time).</div>',
+            f'<div class="chart-desc"><strong>Hourly forecast.</strong> Solar window: '
+            f'<b style="color:#f5b432">{sr:.1f}h – {ss:.1f}h</b> (local time).</div>',
             unsafe_allow_html=True)
         area = alt.Chart(pd2).mark_area(
             line={"color": "#f5b432", "strokeWidth": 2},
@@ -497,7 +518,7 @@ def render_solar_dashboard(df, predictions, future_dates, lat):
                 y=alt.Y("Avg GHI:Q", title="Avg GHI (W/m²)"),
                 tooltip=["Hour of day:O", alt.Tooltip("Avg GHI:Q", format=".1f")]
             ).properties(height=300).interactive(), use_container_width=True)
-        psh  = havg["Avg GHI"].sum() / 1000.0
+        psh = havg["Avg GHI"].sum() / 1000.0
         gmax = havg["Avg GHI"].max()
         st.metric("☀️ Avg Peak Sun Hours (PSH)", f"{psh:.2f} h/day")
         rec = ("≥110% DC peak" if gmax > 800 else
@@ -524,7 +545,8 @@ def render_solar_dashboard(df, predictions, future_dates, lat):
     sr, ss = solar_window(lat, future_dates[0] if future_dates else datetime.today())
     rows = []
     for h in range(24):
-        hv = float(hist_h.get(h, 0)); pv = float(pred_h.get(h, 0))
+        hv = float(hist_h.get(h, 0))
+        pv = float(pred_h.get(h, 0))
         av = (hv + pv) / 2 if pv else hv
         period = ("🌙 Night"     if h < sr - .5 or h > ss + .5 else
                   "🌅 Dawn"      if h <= sr + 1 else
@@ -563,25 +585,26 @@ def render_wind_dashboard(df, predictions, future_dates):
     check_flat_prediction(preds, "wind speed forecast")
 
     st.markdown(
-        '<div class="pred-metrics">'
-        '<div class="pm pm-wind"><div class="pm-lbl">💨 Avg Wind Speed</div>'
-        '<div class="pm-val">' + f"{avg_speed:.2f}" + '<span class="pm-unit"> m/s</span></div>'
-        '<span class="pm-tag tag-wind">Forecast</span></div>'
-        '<div class="pm pm-wind"><div class="pm-lbl">📈 Max Wind Speed</div>'
-        '<div class="pm-val">' + f"{max_speed:.2f}" + '<span class="pm-unit"> m/s</span></div>'
-        '<span class="pm-tag tag-wind">Peak</span></div>'
-        '<div class="pm pm-wind"><div class="pm-lbl">⚡ Avg Power Density</div>'
-        '<div class="pm-val">' + f"{avg_power:.1f}" + '<span class="pm-unit"> W/m²</span></div>'
-        '<span class="pm-tag tag-wind">0.5·ρ·v³</span></div>'
-        '<div class="pm pm-wind"><div class="pm-lbl">🔋 Total Wind Energy</div>'
-        '<div class="pm-val">' + f"{total_kwh:.2f}" + '<span class="pm-unit"> kWh/m²</span></div>'
-        '<span class="pm-tag tag-wind">Over ' + str(len(preds)) + ' h</span></div>'
-        '</div>', unsafe_allow_html=True)
+        f'<div class="pred-metrics">'
+        f'<div class="pm pm-wind"><div class="pm-lbl">💨 Avg Wind Speed</div>'
+        f'<div class="pm-val">{avg_speed:.2f}<span class="pm-unit"> m/s</span></div>'
+        f'<span class="pm-tag tag-wind">Forecast</span></div>'
+        f'<div class="pm pm-wind"><div class="pm-lbl">📈 Max Wind Speed</div>'
+        f'<div class="pm-val">{max_speed:.2f}<span class="pm-unit"> m/s</span></div>'
+        f'<span class="pm-tag tag-wind">Peak</span></div>'
+        f'<div class="pm pm-wind"><div class="pm-lbl">⚡ Avg Power Density</div>'
+        f'<div class="pm-val">{avg_power:.1f}<span class="pm-unit"> W/m²</span></div>'
+        f'<span class="pm-tag tag-wind">0.5·ρ·v³</span></div>'
+        f'<div class="pm pm-wind"><div class="pm-lbl">🔋 Total Wind Energy</div>'
+        f'<div class="pm-val">{total_kwh:.2f}<span class="pm-unit"> kWh/m²</span></div>'
+        f'<span class="pm-tag tag-wind">Over {len(preds)} h</span></div>'
+        f'</div>', unsafe_allow_html=True)
 
     # Chart 1 — last 24h + forecast
     st.subheader("📊 Last 24h + Forecast (Wind Speed)")
     if len(df) >= 24:
-        tmp    = df.tail(24).reset_index(); tmp.columns = ["Datetime"] + list(tmp.columns[1:])
+        tmp = df.tail(24).reset_index()
+        tmp.columns = ["Datetime"] + list(tmp.columns[1:])
         last24 = tmp[["Datetime", "wind_speed_10m"]].rename(
             columns={"wind_speed_10m": "WindSpeed"})
         last24["Type"] = "Historical (last 24h)"
@@ -606,14 +629,18 @@ def render_wind_dashboard(df, predictions, future_dates):
 
     # Chart 2 — historical
     st.subheader("📊 Historical Wind Speed")
-    df_r = df.reset_index(); dcol = df_r.columns[0]
-    hall = df_r[[dcol, "wind_speed_10m"]].copy(); hall.columns = ["Datetime", "WindSpeed"]
+    df_r = df.reset_index()
+    dcol = df_r.columns[0]
+    hall = df_r[[dcol, "wind_speed_10m"]].copy()
+    hall.columns = ["Datetime", "WindSpeed"]
     mn_d, mx_d = hall["Datetime"].min().date(), hall["Datetime"].max().date()
     c1, c2 = st.columns(2)
-    with c1: fi = st.date_input("From", value=max(mn_d, mx_d - timedelta(days=3)),
-                                min_value=mn_d, max_value=mx_d, key="hd1_wind")
-    with c2: ff = st.date_input("To",   value=mx_d,
-                                min_value=mn_d, max_value=mx_d, key="hd2_wind")
+    with c1:
+        fi = st.date_input("From", value=max(mn_d, mx_d - timedelta(days=3)),
+                           min_value=mn_d, max_value=mx_d, key="hd1_wind")
+    with c2:
+        ff = st.date_input("To", value=mx_d,
+                           min_value=mn_d, max_value=mx_d, key="hd2_wind")
     hf = hall[(hall["Datetime"].dt.date >= fi) & (hall["Datetime"].dt.date <= ff)]
     st.altair_chart(
         alt.Chart(hf).mark_line(strokeWidth=1.5, color="#8899bb").encode(
@@ -626,7 +653,7 @@ def render_wind_dashboard(df, predictions, future_dates):
     # Tabs
     st.subheader("📊 Wind Forecast Analysis")
     pd2 = pd.DataFrame({"Hour": future_dates, "WindSpeed": preds,
-                         "Hour_num": [d.hour for d in future_dates]})
+                        "Hour_num": [d.hour for d in future_dates]})
     t1, t2, t3 = st.tabs(["🌬️ Speed curve", "📅 Avg by hour", "📈 Distribution"])
 
     with t1:
@@ -678,7 +705,8 @@ def render_wind_dashboard(df, predictions, future_dates):
     pred_h = pd.DataFrame({"h": [d.hour for d in future_dates], "WS": preds}).groupby("h")["WS"].mean()
     rows = []
     for h in range(24):
-        hv = float(hist_h.get(h, 0)); pv = float(pred_h.get(h, 0))
+        hv = float(hist_h.get(h, 0))
+        pv = float(pred_h.get(h, 0))
         rows.append({"Hour": f"{h:02d}:00",
                      "Hist Wind (m/s)":     round(hv, 2),
                      "Forecast Wind (m/s)": round(pv, 2),
@@ -774,10 +802,10 @@ with st.sidebar:
         bb = "rgba(245,180,50,.08)" if loc_mode == "🔍 Search by city" else "rgba(34,197,94,.08)"
         bd = "rgba(245,180,50,.2)"  if loc_mode == "🔍 Search by city" else "rgba(34,197,94,.2)"
         st.markdown(
-            "<div style='background:" + bb + ";border:1px solid " + bd + ";"
-            "border-radius:8px;padding:.4rem .7rem;font-size:.7rem;color:" + bc + ";"
-            "margin:.3rem 0;line-height:1.5;word-break:break-word'>"
-            + st.session_state["geo_name"][:100] + "</div>",
+            f"<div style='background:{bb};border:1px solid {bd};"
+            f"border-radius:8px;padding:.4rem .7rem;font-size:.7rem;color:{bc};"
+            f"margin:.3rem 0;line-height:1.5;word-break:break-word'>"
+            f"{st.session_state['geo_name'][:100]}</div>",
             unsafe_allow_html=True)
 
     lat = st.session_state["geo_lat"]
@@ -820,7 +848,8 @@ with st.sidebar:
         key="forecast_mode_radio", label_visibility="collapsed",
         help="Standard: fast · Day-Ahead: stacked LSTM · Multivariable: weather features")
 
-    pred_steps = 48; da_hidden_sizes = (64, 32, 16)
+    pred_steps = 48
+    da_hidden_sizes = (64, 32, 16)
     use_temp = use_humidity = use_wind_feat = use_cloud = False
 
     if modo == "Standard":
@@ -867,15 +896,15 @@ hero_color    = "#f5b432" if energy_type == "Solar" else "#22c55e"
 hero_subtitle = ("Solar irradiance prediction with LSTM" if energy_type == "Solar"
                  else "Wind speed forecasting with LSTM")
 st.markdown(
-    '<div class="page-hero">'
-    '<div class="page-eyebrow"><div class="ldot"></div>'
-    + energy_type + ' Forecast &nbsp;·&nbsp; Open-Meteo · LSTM</div>'
-    '<h1 class="page-title"><span style="color:' + hero_color + '">'
-    + energy_type + '</span> Energy Forecast</h1>'
-    '<p class="page-sub" style="font-weight:500;color:#eeeef4;font-size:1rem">'
-    + hero_subtitle + '</p>'
-    '<p class="page-sub">Real-time data · Open-Meteo archive · PyTorch LSTM ⚡</p>'
-    '</div><div class="wave-sep"></div>',
+    f'<div class="page-hero">'
+    f'<div class="page-eyebrow"><div class="ldot"></div>'
+    f'{energy_type} Forecast &nbsp;·&nbsp; Open-Meteo · LSTM</div>'
+    f'<h1 class="page-title"><span style="color:{hero_color}">'
+    f'{energy_type}</span> Energy Forecast</h1>'
+    f'<p class="page-sub" style="font-weight:500;color:#eeeef4;font-size:1rem">'
+    f'{hero_subtitle}</p>'
+    f'<p class="page-sub">Real-time data · Open-Meteo archive · PyTorch LSTM ⚡</p>'
+    f'</div><div class="wave-sep"></div>',
     unsafe_allow_html=True)
 
 col_map, col_info = st.columns([3, 2], gap="large")
@@ -893,18 +922,17 @@ with col_info:
         "color:#44445a;margin-bottom:.6rem'>ℹ️ Model Info</div>",
         unsafe_allow_html=True)
 
-    # Build info card rows
     if energy_type == "Solar":
         sr_now, ss_now = solar_window(lat, datetime.today())
         rise_str = f"{int(sr_now):02d}:{int((sr_now % 1) * 60):02d}"
         set_str  = f"{int(ss_now):02d}:{int((ss_now % 1) * 60):02d}"
         sun_rows = (
-            "<div style='display:flex;justify-content:space-between;font-size:.78rem'>"
-            "<span style='color:#44445a'>Sunrise</span>"
-            "<span style='color:" + accent + ";font-weight:600'>" + rise_str + " h</span></div>"
-            "<div style='display:flex;justify-content:space-between;font-size:.78rem'>"
-            "<span style='color:#44445a'>Sunset</span>"
-            "<span style='color:" + accent + ";font-weight:600'>" + set_str + " h</span></div>"
+            f"<div style='display:flex;justify-content:space-between;font-size:.78rem'>"
+            f"<span style='color:#44445a'>Sunrise</span>"
+            f"<span style='color:{accent};font-weight:600'>{rise_str} h</span></div>"
+            f"<div style='display:flex;justify-content:space-between;font-size:.78rem'>"
+            f"<span style='color:#44445a'>Sunset</span>"
+            f"<span style='color:{accent};font-weight:600'>{set_str} h</span></div>"
         )
     else:
         sun_rows = ""
@@ -920,9 +948,9 @@ with col_info:
         ("Data range",   str(date_start) + " → " + str(date_end), "#eeeef4"),
     ]
     rows_html = "".join(
-        "<div style='display:flex;justify-content:space-between;font-size:.78rem'>"
-        "<span style='color:#44445a'>" + lbl + "</span>"
-        "<span style='color:" + col + ";font-weight:600'>" + val + "</span></div>"
+        f"<div style='display:flex;justify-content:space-between;font-size:.78rem'>"
+        f"<span style='color:#44445a'>{lbl}</span>"
+        f"<span style='color:{col};font-weight:600'>{val}</span></div>"
         for lbl, val, col in info_rows)
 
     source_row = (
@@ -932,13 +960,13 @@ with col_info:
     )
 
     st.markdown(
-        "<div style='background:var(--surface);border:1px solid var(--bd);"
-        "border-radius:14px;padding:1.1rem 1.2rem;line-height:1.7'>"
-        "<div style='font-size:.8rem;color:#8888a0;margin-bottom:.8rem'>"
-        "Set parameters and press <b style='color:" + accent + "'>⚡ Run model</b>.</div>"
-        "<div style='display:grid;gap:6px'>"
-        + rows_html + sun_rows + source_row +
-        "</div></div>",
+        f"<div style='background:var(--surface);border:1px solid var(--bd);"
+        f"border-radius:14px;padding:1.1rem 1.2rem;line-height:1.7'>"
+        f"<div style='font-size:.8rem;color:#8888a0;margin-bottom:.8rem'>"
+        f"Set parameters and press <b style='color:{accent}'>⚡ Run model</b>.</div>"
+        f"<div style='display:grid;gap:6px'>"
+        f"{rows_html}{sun_rows}{source_row}"
+        f"</div></div>",
         unsafe_allow_html=True)
 
 st.markdown("<br>", unsafe_allow_html=True)
@@ -951,15 +979,14 @@ if run:
     st.session_state["modelo_ejecutado"] = False
 
     with st.spinner("🛰️ Fetching historical data from Open-Meteo…"):
-        st.caption("📅 " + str(date_start) + " → " + str(date_end)
-                   + "  |  Lat " + f"{lat:.4f}° Lon {lon:.4f}°")
+        st.caption(f"📅 {date_start} → {date_end}  |  Lat {lat:.4f}° Lon {lon:.4f}°")
         try:
             df = load_openmeteo_data(lat, lon, date_start, date_end, energy_type)
         except RuntimeError as e:
-            st.error(str(e)); st.stop()
+            st.error(str(e))
+            st.stop()
 
-    st.success("✅ " + f"{len(df):,}" + " records loaded  ·  "
-               + str(df.index.min().date()) + " → " + str(df.index.max().date()))
+    st.success(f"✅ {len(df):,} records loaded  ·  {df.index.min().date()} → {df.index.max().date()}")
 
     with st.expander("🔍 Data preview (last 72 h local time)"):
         st.dataframe(df.tail(72), use_container_width=True)
@@ -981,7 +1008,8 @@ if run:
                 X, y = create_sequences(dn, seq_len)
                 X = torch.FloatTensor(X).view(-1, seq_len, 1)
                 y = torch.FloatTensor(y).view(-1)
-                model = LSTMPredictor(); pb = st.progress(0)
+                model = LSTMPredictor()
+                pb = st.progress(0)
                 model, _ = train_model(model, X, y, epochs, pb)
             st.success("✅ Model trained")
             seed_n = (make_seed_sequence_solar(df, seq_len, lat) - m) / (s or 1)
@@ -1021,20 +1049,23 @@ if run:
             if use_wind_feat: feature_cols.append("wind_speed_10m")
             if use_cloud:     feature_cols.append("cloud_cover")
             if len(feature_cols) == 1:
-                st.warning("⚠️ Select at least one additional feature."); st.stop()
+                st.warning("⚠️ Select at least one additional feature.")
+                st.stop()
             st.markdown(
-                '<div class="status-banner">🔬 Multivariable '
-                '<span class="meta">· ' + ", ".join(feature_cols) + '</span></div>',
+                f'<div class="status-banner">🔬 Multivariable '
+                f'<span class="meta">· {", ".join(feature_cols)}</span></div>',
                 unsafe_allow_html=True)
             with st.spinner("🧠 Training multivariable model…"):
                 df_f = df[feature_cols].copy()
                 df_n, medias, desv = normalize_features(df_f)
-                fa = df_n.values; ta = df_n[target_col].values
+                fa = df_n.values
+                ta = df_n[target_col].values
                 X, y = create_sequences_mv(fa, ta, seq_len)
                 X = torch.FloatTensor(X).view(-1, seq_len, len(feature_cols))
                 y = torch.FloatTensor(y).view(-1)
                 model = LSTMMultivariate(input_size=len(feature_cols))
-                pb = st.progress(0); model, _ = train_model(model, X, y, epochs, pb)
+                pb = st.progress(0)
+                model, _ = train_model(model, X, y, epochs, pb)
             st.success("✅ Multivariable model trained")
             predictions = predict_multivariate(
                 model, torch.FloatTensor(fa[-seq_len:]), pred_steps,
@@ -1058,7 +1089,8 @@ if run:
                 X, y = create_sequences(dn, seq_len)
                 X = torch.FloatTensor(X).view(-1, seq_len, 1)
                 y = torch.FloatTensor(y).view(-1)
-                model = LSTMPredictor(); pb = st.progress(0)
+                model = LSTMPredictor()
+                pb = st.progress(0)
                 model, _ = train_model(model, X, y, epochs, pb)
             st.success("✅ Wind model trained")
             seed_n = (make_seed_sequence_wind(df, seq_len) - m) / (s or 1)
@@ -1096,20 +1128,23 @@ if run:
             if use_temp: feature_cols.append("temperature_2m")
             if "wind_gusts_10m" in df.columns: feature_cols.append("wind_gusts_10m")
             if len(feature_cols) == 1:
-                st.warning("⚠️ No additional features available."); st.stop()
+                st.warning("⚠️ No additional features available.")
+                st.stop()
             st.markdown(
-                '<div class="status-banner">🔬 Multivariable (Wind) '
-                '<span class="meta">· ' + ", ".join(feature_cols) + '</span></div>',
+                f'<div class="status-banner">🔬 Multivariable (Wind) '
+                f'<span class="meta">· {", ".join(feature_cols)}</span></div>',
                 unsafe_allow_html=True)
             with st.spinner("🧠 Training multivariable wind model…"):
                 df_f = df[feature_cols].copy()
                 df_n, medias, desv = normalize_features(df_f)
-                fa = df_n.values; ta = df_n[target_col].values
+                fa = df_n.values
+                ta = df_n[target_col].values
                 X, y = create_sequences_mv(fa, ta, seq_len)
                 X = torch.FloatTensor(X).view(-1, seq_len, len(feature_cols))
                 y = torch.FloatTensor(y).view(-1)
                 model = LSTMMultivariate(input_size=len(feature_cols))
-                pb = st.progress(0); model, _ = train_model(model, X, y, epochs, pb)
+                pb = st.progress(0)
+                model, _ = train_model(model, X, y, epochs, pb)
             st.success("✅ Multivariable wind model trained")
             predictions = predict_multivariate(
                 model, torch.FloatTensor(fa[-seq_len:]), pred_steps,
@@ -1146,16 +1181,16 @@ if st.session_state.get("modelo_ejecutado"):
 
     sowi_color = "#f5b432" if res_et == "Solar" else "#22c55e"
     st.markdown(
-        "<div style='background:linear-gradient(135deg,rgba(245,180,50,.08),rgba(34,197,94,.06));"
-        "border:1px solid rgba(245,180,50,.2);border-radius:16px;"
-        "padding:1.4rem 1.6rem;text-align:center;margin:1.8rem 0 .5rem'>"
-        "<div style='font-size:1.5rem;margin-bottom:.4rem'>🤖</div>"
-        "<div style='font-size:1rem;font-weight:700;color:#eeeef4;margin-bottom:.3rem'>"
-        "Want to analyze these results further?</div>"
-        "<div style='font-size:.85rem;color:#8888a0'>"
-        "Ask <b style='color:" + sowi_color + "'>Sowi AI</b> — "
-        "answers in ≤ 400 tokens, focused on your forecast.</div>"
-        "</div>", unsafe_allow_html=True)
+        f"<div style='background:linear-gradient(135deg,rgba(245,180,50,.08),rgba(34,197,94,.06));"
+        f"border:1px solid rgba(245,180,50,.2);border-radius:16px;"
+        f"padding:1.4rem 1.6rem;text-align:center;margin:1.8rem 0 .5rem'>"
+        f"<div style='font-size:1.5rem;margin-bottom:.4rem'>🤖</div>"
+        f"<div style='font-size:1rem;font-weight:700;color:#eeeef4;margin-bottom:.3rem'>"
+        f"Want to analyze these results further?</div>"
+        f"<div style='font-size:.85rem;color:#8888a0'>"
+        f"Ask <b style='color:{sowi_color}'>Sowi AI</b> — "
+        f"answers in ≤ 400 tokens, focused on your forecast.</div>"
+        f"</div>", unsafe_allow_html=True)
 
     _, cc, _ = st.columns([1, 2, 1])
     with cc:
@@ -1170,15 +1205,15 @@ if st.session_state.get("modelo_ejecutado"):
 else:
     icon = "🌞" if energy_type == "Solar" else "💨"
     st.markdown(
-        "<div style='text-align:center;padding:2.5rem 1rem;background:var(--surface);"
-        "border:1px dashed var(--bd-hi);border-radius:20px;margin-top:1rem'>"
-        "<div style='font-size:2.2rem;margin-bottom:.6rem;animation:fi 3s ease-in-out infinite'>"
-        + icon + "⚡</div>"
-        "<div style='font-size:1rem;font-weight:600;color:#eeeef4;margin-bottom:.3rem'>"
-        "Ready to forecast</div>"
-        "<div style='font-size:.85rem;color:#8888a0;max-width:380px;margin:0 auto'>"
-        "Configure the parameters in the sidebar and press "
-        "<b style='color:#f5b432'>⚡ Run model</b>.</div>"
-        "</div>"
-        "<style>@keyframes fi{0%,100%{transform:translateY(0)}50%{transform:translateY(-7px)}}</style>",
+        f"<div style='text-align:center;padding:2.5rem 1rem;background:var(--surface);"
+        f"border:1px dashed var(--bd-hi);border-radius:20px;margin-top:1rem'>"
+        f"<div style='font-size:2.2rem;margin-bottom:.6rem;animation:fi 3s ease-in-out infinite'>"
+        f"{icon}⚡</div>"
+        f"<div style='font-size:1rem;font-weight:600;color:#eeeef4;margin-bottom:.3rem'>"
+        f"Ready to forecast</div>"
+        f"<div style='font-size:.85rem;color:#8888a0;max-width:380px;margin:0 auto'>"
+        f"Configure the parameters in the sidebar and press "
+        f"<b style='color:#f5b432'>⚡ Run model</b>.</div>"
+        f"</div>"
+        f"<style>@keyframes fi{{0%,100%{{transform:translateY(0)}}50%{{transform:translateY(-7px)}}}}</style>",
         unsafe_allow_html=True)
