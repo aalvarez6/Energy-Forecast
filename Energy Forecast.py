@@ -115,7 +115,7 @@ h1,h2,h3,h4{ font-family:var(--font)!important;color:var(--t1)!important; }
 @st.cache_data(show_spinner=False, ttl=86400)
 def geocode(query: str):
     """Robust geocoding using Nominatim with URL encoding and language fallback."""
-    headers = {"User-Agent": "RenewableEnergyForecast/2.0 (contacto@misitio.com)"}
+    headers = {"User-Agent": "RenewableEnergyForecast/2.0 (https://github.com/aalvarez6/Energy-Forecast/blob/main/Energy%20Forecast.py)"}
     for lang in ["", "en", "es"]:
         try:
             params = {
