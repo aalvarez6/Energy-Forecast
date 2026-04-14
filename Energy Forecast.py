@@ -22,7 +22,7 @@ from zoneinfo import ZoneInfo
 
 st.set_page_config(
     page_title="Renewable Energy Forecast",
-    page_icon="🌞⚡",
+    page_icon="⚡",
     layout="wide",
     initial_sidebar_state="expanded",
 )
@@ -1288,7 +1288,7 @@ if st.session_state.get("modelo_ejecutado"):
 
     _, cc, _ = st.columns([1, 2, 1])
     with cc:
-        if st.page_link("/", label="⚡ Go to Forecast →", icon="🌞", use_container_width=True)
+        if st.page_link("/", label="⚡ Go to Forecast →", icon="🌞", use_container_width=True):
             st.switch_page(_SOWI_AI_PAGE)
 
     st.markdown(
