@@ -691,8 +691,17 @@ def main():
         st.markdown("<br>", unsafe_allow_html=True)
         _, cc, _ = st.columns([1,2,1])
         with cc:
-            if st.button("⚡ Go to Forecast →", type="primary", use_container_width=True):
-                st.switch_page("Renewable Energy Forecast.py")   # adjust to your main file name
+            # Intenta usar st.page_link si está disponible (Streamlit >=1.31)
+            try:
+                # Primero intenta redirigir a la página principal (asume que el archivo se llama "Renewable Energy Forecast.py")
+                # Si no existe, captura la excepción y muestra un enlace manual.
+                st.page_link("Renewable Energy Forecast.py", label="⚡ Go to Forecast →", icon="🌞", use_container_width=True)
+            except Exception:
+                # Fallback: enlace HTML directo a la raíz de la app
+                st.markdown("""
+                <a href="/" target="_self" style="display: block; text-align: center; background: linear-gradient(135deg, rgba(245,180,50,.18), rgba(245,180,50,.08)); border: 1px solid rgba(245,180,50,.38); color: #f5b432; font-family: 'Sora', sans-serif; font-weight: 600; padding: 0.5rem 1rem; border-radius: 12px; text-decoration: none; transition: all 0.18s;">⚡ Go to Forecast →</a>
+                """, unsafe_allow_html=True)
+                st.caption("If the button doesn't work, go to the main page manually.")
         return
 
     # Load required data from session_state
