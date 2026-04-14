@@ -1,13 +1,11 @@
 """
 Sowi AI Analyst — Sowi AI Analyst.py
 English version · solar & wind expert · dynamic prompts
-FIXED VERSION — bugs corregidos y optimizado
 """
 
 import streamlit as st
 import numpy as np
 import anthropic
-import html as html_lib
 from datetime import datetime
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -179,22 +177,10 @@ html,body,[class*="css"] { font-family:var(--font) !important; }
 .empty-title{font-size:1.15rem;font-weight:600;color:var(--t1);margin-bottom:.4rem}
 .empty-sub{font-size:.86rem;color:var(--t2);max-width:360px;margin:0 auto}
 
-/* HISTORY LIMIT BADGE */
-.hist-badge { font-size:.65rem; color:var(--t3); text-align:right; margin-bottom:.4rem; font-family:var(--mono); }
-
 .footer{text-align:center;margin-top:2rem;font-size:.65rem;color:var(--t3);letter-spacing:.07em}
 .stSpinner>div{border-top-color:var(--amber) !important}
 </style>
 """, unsafe_allow_html=True)
-
-
-# ══════════════════════════════════════════════════════════════════════════════
-#  CONSTANTS
-# ══════════════════════════════════════════════════════════════════════════════
-# FIX #5: model string correcto para Anthropic API
-CLAUDE_MODEL   = "claude-sonnet-4-5"
-# FIX #15: límite de historial para no exceder context window
-MAX_HISTORY    = 40   # máximo de mensajes (usuario + asistente) a enviar a la API
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -204,53 +190,19 @@ MAX_HISTORY    = 40   # máximo de mensajes (usuario + asistente) a enviar a la 
 def _ts() -> str:
     return datetime.now().strftime("%H:%M")
 
-
-def _sanitize(text: str) -> str:
-    """
-    FIX #16: Permitir subset seguro de HTML para formato de mensajes de Sowi
-    (bold, em, code), pero escapar todo lo demás para evitar XSS.
-    Simplificación: confiamos en la respuesta de Claude y no del usuario.
-    El texto de usuario se escapa completamente.
-    """
-    return html_lib.escape(text)
-
-
 def _render_msg(role: str, content: str):
     wrap = "mw usr" if role == "user" else "mw"
     bbl  = "bbl bbl-usr" if role == "user" else "bbl bbl-sowi"
     av_c = "av av-usr" if role == "user" else "av av-sowi"
     icon = "👤" if role == "user" else "🌞💨"
-
-    # FIX #16: escapar contenido del usuario; permitir HTML en respuestas de Sowi
-    if role == "user":
-        safe_content = _sanitize(content).replace("\n", "<br>")
-    else:
-        # Respuestas del asistente: Claude solo genera Markdown/HTML básico
-        safe_content = content
-
     st.markdown(f"""
     <div class="{wrap}">
       <div class="{av_c}">{icon}</div>
       <div>
-        <div class="{bbl}">{safe_content}</div>
+        <div class="{bbl}">{content}</div>
         <div class="ts-lbl">{_ts()}</div>
       </div>
     </div>""", unsafe_allow_html=True)
-
-
-def _trim_history(history: list, max_msgs: int = MAX_HISTORY) -> list:
-    """
-    FIX #15: Mantener siempre los últimos max_msgs mensajes para no exceder
-    el context window de Claude. Siempre preserva pares usuario/asistente.
-    """
-    if len(history) <= max_msgs:
-        return history
-    # Recortar desde el principio, mantener número par (pares user/assistant)
-    trim_to = len(history) - max_msgs
-    # asegurarse de empezar en un mensaje de usuario
-    while trim_to < len(history) and history[trim_to]["role"] != "user":
-        trim_to += 1
-    return history[trim_to:]
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -271,35 +223,27 @@ def _build_expert_prompt(energy_type: str, preds, future_dates, lat, lon, years,
     by_hour: dict = {}
     for d, v in zip(future_dates, arr):
         by_hour.setdefault(d.hour, []).append(v)
-
-    # FIX #10: best_hour solo entre horas con valores positivos reales (> 1.0)
-    positive_hours = {h: vs for h, vs in by_hour.items() if np.mean(vs) > 1.0}
-    if positive_hours:
-        best_h     = max(positive_hours, key=lambda h: np.mean(positive_hours[h]))
-        best_h_avg = float(np.mean(positive_hours[best_h]))
-    elif by_hour:
-        best_h     = max(by_hour, key=lambda h: np.mean(by_hour[h]))
-        best_h_avg = float(np.mean(by_hour[best_h]))
-    else:
-        best_h, best_h_avg = 12, 0.0
+    best_h = max(by_hour, key=lambda h: np.mean(by_hour[h])) if by_hour else 12
+    best_h_avg = float(np.mean(by_hour.get(best_h, [0])))
 
     # Daily energy
     dias: dict = {}
     for d, v in zip(future_dates, arr):
         dias.setdefault(d.strftime("%Y-%m-%d"), []).append(v)
     dias_energy = {k: sum(vs)/1000 for k, vs in dias.items()}
-    best_day  = max(dias_energy, key=dias_energy.get) if dias_energy else "N/A"
+    best_day = max(dias_energy, key=dias_energy.get) if dias_energy else "N/A"
     worst_day = min(dias_energy, key=dias_energy.get) if dias_energy else "N/A"
 
     if energy_type == "Solar":
+        # Solar specific
         ghi_mean = avg_val
-        ghi_max  = max_val
-        e_kwh    = total_energy
+        ghi_max = max_val
+        e_kwh = total_energy
         hrs_prod = productive_hrs
         hrs_peak = int((arr > 600).sum())
-        ghi_pos  = arr[arr > 0]
-        ghi_min  = float(ghi_pos.min()) if len(ghi_pos) > 0 else 0.0
-        pico_idx  = int(arr.argmax())
+        ghi_pos = arr[arr > 0]
+        ghi_min = float(ghi_pos.min()) if len(ghi_pos) > 0 else 0.0
+        pico_idx = int(arr.argmax())
         pico_hora = future_dates[pico_idx].strftime("%Y-%m-%d %H:%M")
 
         if   ghi_mean >= 500: resource = "exceptional (arid/desert zones)"
@@ -310,11 +254,6 @@ def _build_expert_prompt(energy_type: str, preds, future_dates, lat, lon, years,
 
         e_ideal = (ghi_max / 1000.0) * n
         fc = (e_kwh / e_ideal * 100) if e_ideal > 0 else 0.0
-
-        hourly_profile_lines = "\n".join(
-            f"  {h:02d}:00  →  {np.mean(by_hour[h]):6.1f} W/m²  {'█' * min(int(np.mean(by_hour[h])/50), 18)}"
-            for h in sorted(by_hour) if 5 <= h <= 19
-        )
 
         return f"""You are Sowi, a senior renewable energy expert with 15 years of experience in both photovoltaic solar and wind energy.  
 You have deep knowledge of:
@@ -346,11 +285,11 @@ Open-Meteo history: {years} year(s)
   Best time slot : {best_h:02d}:00–{best_h+1:02d}:00  (avg {best_h_avg:.1f} W/m²)
   Capacity factor: {fc:.1f} %
   Resource class : {resource}
-  Best day est.  : {best_day}  ({dias_energy.get(best_day, 0):.3f} kWh/m²)
-  Worst day est. : {worst_day}  ({dias_energy.get(worst_day, 0):.3f} kWh/m²)
+  Best day est.  : {best_day}  ({dias_energy.get(best_day,0):.3f} kWh/m²)
+  Worst day est. : {worst_day}  ({dias_energy.get(worst_day,0):.3f} kWh/m²)
 
 ── HOURLY PROFILE (solar hours) ──
-{hourly_profile_lines}
+{chr(10).join(f"  {h:02d}:00  →  {np.mean(by_hour[h]):6.1f} W/m²  {'█' * min(int(np.mean(by_hour[h])/50), 18)}" for h in sorted(by_hour) if 5 <= h <= 19)}
 
 ════════════════════════════════════════════════════
 RESPONSE RULES
@@ -358,7 +297,7 @@ RESPONSE RULES
 LANGUAGE & STYLE
   · Always respond in clear, professional English.
   · Give the number first, then explain.
-  · Use bold for key figures.
+  · Use bold for key figures (CSS highlights them automatically).
   · Use bullet lists when 3+ items.
   · End each technical response with a 1-line practical tip preceded by ⚡ or 🌊.
 
@@ -376,34 +315,30 @@ SMART BEHAVIOR
   · Never invent data not in the forecast; if something cannot be derived, say so.
   · If you spot anomalies (GHI > 0 at midnight, extreme outliers), proactively mention them.
   · You can answer general solar energy questions even if not about this specific forecast.
-  · When geographic context is relevant, apply specific knowledge.
+  · When geographic context is relevant (Medellín, Colombia, Latin America), apply specific knowledge.
 """
 
     else:  # Wind
-        wind_speed    = arr
-        avg_ws        = avg_val
-        max_ws        = max_val
-        rho           = 1.225
+        wind_speed = arr
+        avg_ws = avg_val
+        max_ws = max_val
+        rho = 1.225
         power_density = 0.5 * rho * (wind_speed ** 3)
-        avg_pd        = float(power_density.mean())
-        total_energy_kwh = float(power_density.sum()) / 1000
+        avg_pd = float(power_density.mean())
+        total_energy_wh = power_density.sum()
+        total_energy_kwh = total_energy_wh / 1000
 
-        if   avg_ws >= 7.5: resource = "excellent (class 7) – ideal for large turbines"
+        if avg_ws >= 7.5: resource = "excellent (class 7) – ideal for large turbines"
         elif avg_ws >= 6.0: resource = "good (class 5–6) – viable for utility-scale"
         elif avg_ws >= 4.5: resource = "moderate (class 3–4) – suitable for small turbines"
         elif avg_ws >= 3.0: resource = "marginal (class 2) – limited, hybrid systems"
-        else:                resource = "poor (class 1) – not recommended for standalone wind"
+        else: resource = "poor (class 1) – not recommended for standalone wind"
 
         cf_est = min(0.45, max(0.05, (avg_ws - 3) / 12))
-        fc     = cf_est * 100
+        fc = cf_est * 100
 
-        pico_idx  = int(arr.argmax())
+        pico_idx = int(arr.argmax())
         pico_hora = future_dates[pico_idx].strftime("%Y-%m-%d %H:%M")
-
-        hourly_profile_lines = "\n".join(
-            f"  {h:02d}:00  →  {np.mean(by_hour[h]):5.2f} m/s  {'█' * min(int(np.mean(by_hour[h])), 18)}"
-            for h in sorted(by_hour)
-        )
 
         return f"""You are Sowi, a senior renewable energy expert with 15 years of experience in both photovoltaic solar and wind energy.  
 You have deep knowledge of:
@@ -434,11 +369,11 @@ Open-Meteo history: {years} year(s)
   Best time slot  : {best_h:02d}:00–{best_h+1:02d}:00  (avg {best_h_avg:.2f} m/s)
   Capacity factor (est.) : {fc:.1f} %
   Resource class  : {resource}
-  Best day est.   : {best_day}  ({dias_energy.get(best_day, 0):.3f} kWh/m²)
-  Worst day est.  : {worst_day}  ({dias_energy.get(worst_day, 0):.3f} kWh/m²)
+  Best day est.   : {best_day}  ({dias_energy.get(best_day,0):.3f} kWh/m²)
+  Worst day est.  : {worst_day}  ({dias_energy.get(worst_day,0):.3f} kWh/m²)
 
 ── HOURLY PROFILE (wind speed) ──
-{hourly_profile_lines}
+{chr(10).join(f"  {h:02d}:00  →  {np.mean(by_hour[h]):5.2f} m/s  {'█' * min(int(np.mean(by_hour[h])), 18)}" for h in sorted(by_hour) if 0 <= h <= 23)}
 
 ════════════════════════════════════════════════════
 RESPONSE RULES
@@ -446,7 +381,7 @@ RESPONSE RULES
 LANGUAGE & STYLE
   · Always respond in clear, professional English.
   · Give the number first, then explain.
-  · Use bold for key figures.
+  · Use bold for key figures (CSS highlights them automatically).
   · Use bullet lists when 3+ items.
   · End each technical response with a 1-line practical tip preceded by ⚡ or 🌊.
 
@@ -462,7 +397,7 @@ SMART BEHAVIOR
   · If user asks about turbine size, ask for desired power or annual consumption.
   · If asked about payback/ROI, ask for local electricity tariff and turbine cost estimate if not provided.
   · Never invent data not in the forecast; if something cannot be derived, say so.
-  · If you spot anomalies, mention them proactively.
+  · If you spot anomalies (wind speed > 20 m/s constant, negative values), mention them.
   · You can answer general wind energy questions even if not about this specific forecast.
   · When geographic context is relevant, apply specific knowledge of wind patterns in the region.
 """
@@ -473,17 +408,12 @@ SMART BEHAVIOR
 # ══════════════════════════════════════════════════════════════════════════════
 
 def _call_sowi(system: str, history: list) -> str:
-    """
-    FIX #5: Usar model string correcto.
-    FIX #15: Historial ya truncado antes de llamar.
-    """
     client = anthropic.Anthropic(api_key=st.secrets["ANTHROPIC_API_KEY"])
-    trimmed = _trim_history(history)
     r = client.messages.create(
-        model=CLAUDE_MODEL,
+        model="claude-sonnet-4-20250514",
         max_tokens=1400,
         system=system,
-        messages=[{"role": m["role"], "content": m["content"]} for m in trimmed],
+        messages=[{"role": m["role"], "content": m["content"]} for m in history],
     )
     return r.content[0].text
 
@@ -493,7 +423,7 @@ def _call_sowi(system: str, history: list) -> str:
 # ══════════════════════════════════════════════════════════════════════════════
 
 QUICK = [
-    ("⚡", "Energy estimate",
+    ("⚡", "Energy estimate", 
      "Based on this forecast, how much energy could I generate? Show me the calculation."),
     ("🌊", "Resource quality",
      "Analyze the renewable resource quality at this location. Is it good for solar and/or wind?"),
@@ -512,31 +442,14 @@ QUICK = [
 #  RENDER: METRICS
 # ══════════════════════════════════════════════════════════════════════════════
 
-def _best_hour_label(arr, future_dates):
-    """FIX #10: solo considerar horas con valores realmente positivos."""
-    by_h = {}
-    for d, v in zip(future_dates, arr):
-        by_h.setdefault(d.hour, []).append(v)
-    positive_h = {h: vs for h, vs in by_h.items() if np.mean(vs) > 1.0}
-    if positive_h:
-        best_h = max(positive_h, key=lambda h: np.mean(positive_h[h]))
-    elif by_h:
-        best_h = max(by_h, key=lambda h: np.mean(by_h[h]))
-    else:
-        best_h = 12
-    return f"{best_h:02d}:00–{best_h+1:02d}:00"
-
-
 def _render_metrics(preds, future_dates, energy_type, modo):
     arr = np.clip(preds, 0, None)
-    best_slot = _best_hour_label(arr, future_dates)
-
     if energy_type == "Solar":
         ekwh = arr.sum() / 1000
         hp   = int((arr > 50).sum())
-        if   arr.mean() >= 300: cal, tag = "Excellent ☀️", "tag-solar"
-        elif arr.mean() >= 150: cal, tag = "Good 🌤️",      "tag-ok"
-        else:                    cal, tag = "Moderate ⛅",   "tag-warn"
+        if arr.mean() >= 300: cal, tag = "Excellent ☀️", "tag-solar"
+        elif arr.mean() >= 150: cal, tag = "Good 🌤️", "tag-ok"
+        else: cal, tag = "Moderate ⛅", "tag-warn"
 
         st.markdown(f"""
         <div class="metrics-grid">
@@ -553,13 +466,12 @@ def _render_metrics(preds, future_dates, energy_type, modo):
             <div class="mc-val">{hp}<span class="mc-unit"> h</span></div>
             <span class="mc-tag tag-solar">GHI > 50 W/m²</span></div>
           <div class="mc mc-solar"><div class="mc-lbl">Best Time Slot</div>
-            <div class="mc-val" style="font-size:1.1rem">{best_slot}</div>
+            <div class="mc-val" style="font-size:1.1rem">{_best_hour(arr, future_dates)}<span class="mc-unit"> h</span></div>
             <span class="mc-tag tag-solar">Peak GHI hour</span></div>
           <div class="mc mc-solar"><div class="mc-lbl">Model · Hours</div>
             <div class="mc-val">{len(future_dates)}<span class="mc-unit"> h</span></div>
             <span class="mc-tag tag-solar">{modo}</span></div>
         </div>""", unsafe_allow_html=True)
-
     else:  # Wind
         avg_ws = arr.mean()
         max_ws = arr.max()
@@ -567,10 +479,9 @@ def _render_metrics(preds, future_dates, energy_type, modo):
         power_density = 0.5 * rho * (arr ** 3)
         avg_pd = power_density.mean()
         total_energy_kwh = power_density.sum() / 1000
-
-        if   avg_ws >= 6.0: cal, tag = "Excellent 💨", "tag-wind"
-        elif avg_ws >= 4.0: cal, tag = "Good 🌬️",      "tag-ok"
-        else:                cal, tag = "Moderate 🍃",  "tag-warn"
+        if avg_ws >= 6.0: cal, tag = "Excellent 💨", "tag-wind"
+        elif avg_ws >= 4.0: cal, tag = "Good 🌬️", "tag-ok"
+        else: cal, tag = "Moderate 🍃", "tag-warn"
 
         st.markdown(f"""
         <div class="metrics-grid">
@@ -587,12 +498,19 @@ def _render_metrics(preds, future_dates, energy_type, modo):
             <div class="mc-val">{total_energy_kwh:.2f}<span class="mc-unit"> kWh/m²</span></div>
             <span class="mc-tag tag-wind">Over {len(future_dates)} h</span></div>
           <div class="mc mc-wind"><div class="mc-lbl">Best Time Slot</div>
-            <div class="mc-val" style="font-size:1.1rem">{best_slot}</div>
+            <div class="mc-val" style="font-size:1.1rem">{_best_hour(arr, future_dates)}<span class="mc-unit"> h</span></div>
             <span class="mc-tag tag-wind">Peak wind hour</span></div>
           <div class="mc mc-wind"><div class="mc-lbl">Model · Hours</div>
             <div class="mc-val">{len(future_dates)}<span class="mc-unit"> h</span></div>
             <span class="mc-tag tag-wind">{modo}</span></div>
         </div>""", unsafe_allow_html=True)
+
+def _best_hour(arr, future_dates):
+    by_h = {}
+    for d, v in zip(future_dates, arr):
+        by_h.setdefault(d.hour, []).append(v)
+    best_h = max(by_h, key=lambda h: np.mean(by_h[h])) if by_h else 12
+    return f"{best_h:02d}:00–{best_h+1:02d}:00"
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -609,20 +527,10 @@ def _render_chips():
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-#  RENDER: CHAT
+#  RENDER: CHAT (input at bottom)
 # ══════════════════════════════════════════════════════════════════════════════
 
 def _render_chat(system: str):
-    # FIX #15: mostrar contador de mensajes y advertencia si está cerca del límite
-    history = st.session_state.get("sowi_history", [])
-    n_msgs  = len(history)
-    if n_msgs > MAX_HISTORY * 0.75:
-        pct = int(n_msgs / MAX_HISTORY * 100)
-        st.markdown(
-            f'<div class="hist-badge">💬 {n_msgs} messages — {pct}% of history limit '
-            f'({MAX_HISTORY}). Older messages will be dropped automatically.</div>',
-            unsafe_allow_html=True)
-
     st.markdown("""
     <div class="chat-shell">
       <div class="chat-topbar">
@@ -630,13 +538,13 @@ def _render_chat(system: str):
           <div class="tl tl-r"></div><div class="tl tl-y"></div><div class="tl tl-g"></div>
         </div>
         <span class="topbar-name">🌞💨 Sowi · Renewable Energy Expert</span>
-        <span class="topbar-model">claude-sonnet-4-5</span>
+        <span class="topbar-model">claude-sonnet-4</span>
       </div>
     """, unsafe_allow_html=True)
 
     st.markdown('<div class="chat-msgs">', unsafe_allow_html=True)
 
-    if not history:
+    if not st.session_state.get("sowi_history"):
         _render_msg("assistant",
             "Hello! I'm <strong>Sowi</strong> 🌞💨 — your renewable energy expert for both solar and wind. "
             "I've loaded your forecast data (Open‑Meteo) and I'm ready to help. "
@@ -644,7 +552,7 @@ def _render_chat(system: str):
             "estimate ROI, design battery storage, and much more. Where shall we start? ⚡"
         )
 
-    for m in history:
+    for m in st.session_state.get("sowi_history", []):
         _render_msg(m["role"], m["content"])
 
     if st.session_state.get("_typing"):
@@ -677,7 +585,7 @@ def _render_chat(system: str):
 
     if final:
         st.session_state.setdefault("sowi_history", [])
-        st.session_state["sowi_history"].append({"role": "user", "content": final})
+        st.session_state["sowi_history"].append({"role":"user","content":final})
         st.session_state["_typing"] = True
         st.rerun()
 
@@ -690,22 +598,10 @@ def _render_chat(system: str):
             ans = "⏱️ <strong>API rate limit reached.</strong> Please wait a moment and try again."
         except KeyError:
             ans = "❌ <strong>API key not found.</strong> Add <code>ANTHROPIC_API_KEY</code> to <code>.streamlit/secrets.toml</code>."
-        except anthropic.BadRequestError as e:
-            # FIX #15: manejar context window exceeded específicamente
-            if "context_length" in str(e).lower() or "too long" in str(e).lower():
-                # Forzar truncado más agresivo y reintentar
-                st.session_state["sowi_history"] = _trim_history(
-                    st.session_state["sowi_history"], max_msgs=MAX_HISTORY // 2)
-                try:
-                    ans = _call_sowi(system, st.session_state["sowi_history"])
-                except Exception:
-                    ans = "⚠️ <strong>Conversation too long.</strong> History was trimmed. Please try again."
-            else:
-                ans = f"❌ <strong>Request error:</strong> <code>{html_lib.escape(str(e))}</code>"
         except Exception as e:
-            ans = f"❌ <strong>Error connecting to Claude:</strong> <code>{html_lib.escape(str(e))}</code>"
+            ans = f"❌ <strong>Error connecting to Claude:</strong> <code>{e}</code>"
 
-        st.session_state["sowi_history"].append({"role": "assistant", "content": ans})
+        st.session_state["sowi_history"].append({"role":"assistant","content":ans})
         st.session_state["_typing"] = False
         st.rerun()
 
@@ -729,23 +625,16 @@ def _render_sidebar(has_data: bool, energy_type: str):
         else:
             st.warning("⚠️ No active forecast")
 
-        n_msgs = len(st.session_state.get("sowi_history", []))
-        st.metric("Messages", n_msgs)
-
-        # FIX #15: mostrar barra de progreso del historial
-        if n_msgs > 0:
-            pct = min(1.0, n_msgs / MAX_HISTORY)
-            st.progress(pct, text=f"History: {n_msgs}/{MAX_HISTORY}")
-
+        st.metric("Messages", len(st.session_state.get("sowi_history", [])))
         st.markdown("---")
 
         if st.button("🗑️ New conversation", use_container_width=True):
             st.session_state["sowi_history"] = []
-            st.session_state["_typing"]      = False
+            st.session_state["_typing"]     = False
             st.rerun()
 
         st.markdown("---")
-        st.markdown(f"""
+        st.markdown("""
         <div style='font-size:.7rem;color:#44445a;line-height:1.65'>
         <strong style='color:#8888a0'>Sowi can answer about:</strong><br>
         · PV & wind system sizing<br>
@@ -756,7 +645,7 @@ def _render_sidebar(has_data: bool, energy_type: str):
         · Hybrid solar‑wind systems<br>
         · Tropical and Andean climates<br><br>
         <strong style='color:#8888a0'>Active model:</strong><br>
-        {CLAUDE_MODEL}
+        claude-sonnet-4-20250514
         </div>""", unsafe_allow_html=True)
 
 
@@ -765,7 +654,7 @@ def _render_sidebar(has_data: bool, energy_type: str):
 # ══════════════════════════════════════════════════════════════════════════════
 
 def main():
-    has_data    = st.session_state.get("modelo_ejecutado", False)
+    has_data = st.session_state.get("modelo_ejecutado", False)
     energy_type = st.session_state.get("energy_type", "Solar")
     _render_sidebar(has_data, energy_type)
 
@@ -797,23 +686,20 @@ def main():
           </div>
         </div>""", unsafe_allow_html=True)
         st.markdown("<br>", unsafe_allow_html=True)
-        _, cc, _ = st.columns([1, 2, 1])
+        _, cc, _ = st.columns([1,2,1])
         with cc:
+            # CORRECTED: now points to the main file "Energy Forecast.py"
             try:
                 st.page_link("Energy Forecast.py", label="⚡ Go to Forecast →", icon="🌞", use_container_width=True)
             except Exception:
                 st.markdown("""
-                <a href="/" target="_self" style="display:block;text-align:center;
-                background:linear-gradient(135deg,rgba(245,180,50,.18),rgba(245,180,50,.08));
-                border:1px solid rgba(245,180,50,.38);color:#f5b432;font-family:'Sora',sans-serif;
-                font-weight:600;padding:0.5rem 1rem;border-radius:12px;text-decoration:none">
-                ⚡ Go to Forecast →</a>
+                <a href="/" target="_self" style="display: block; text-align: center; background: linear-gradient(135deg, rgba(245,180,50,.18), rgba(245,180,50,.08)); border: 1px solid rgba(245,180,50,.38); color: #f5b432; font-family: 'Sora', sans-serif; font-weight: 600; padding: 0.5rem 1rem; border-radius: 12px; text-decoration: none; transition: all 0.18s;">⚡ Go to Forecast →</a>
                 """, unsafe_allow_html=True)
                 st.caption("If the button doesn't work, go to the main page manually.")
         return
 
-    # Validar datos requeridos
-    required = ["predictions", "future_dates", "lat", "lon", "modo"]
+    # Load required data from session_state
+    required = ["predictions","future_dates","lat","lon","modo"]
     if not all(k in st.session_state for k in required):
         st.error("Incomplete forecast data. Please run the forecast again.")
         st.stop()
@@ -824,13 +710,13 @@ def main():
     lon          = st.session_state["lon"]
     modo         = st.session_state["modo"]
 
-    # Calcular años del rango histórico
+    # Compute years from date_start/date_end if available, else default 2
     if "date_start" in st.session_state and "date_end" in st.session_state:
         try:
             start = datetime.strptime(st.session_state["date_start"], "%Y-%m-%d")
-            end   = datetime.strptime(st.session_state["date_end"],   "%Y-%m-%d")
+            end   = datetime.strptime(st.session_state["date_end"], "%Y-%m-%d")
             years = round((end - start).days / 365.25, 1)
-        except Exception:
+        except:
             years = 2.0
     else:
         years = 2.0
@@ -847,22 +733,23 @@ def main():
       </span>
     </div>""", unsafe_allow_html=True)
 
-    # Métricas
+    # Metrics
     _render_metrics(preds, future_dates, energy_type, modo)
 
     # Quick chips
     _render_chips()
 
-    # System prompt dinámico
+    # Chat system prompt (dynamic)
     system = _build_expert_prompt(energy_type, preds, future_dates, lat, lon, years, modo)
     _render_chat(system)
 
     # Footer
-    st.markdown(f"""
+    st.markdown("""
     <div class="footer">
-      🌞💨 Sowi AI Analyst · Open‑Meteo · {CLAUDE_MODEL} · Solar & Wind Expert
+      🌞💨 Sowi AI Analyst · Open‑Meteo · Claude Sonnet 4 · Solar & Wind Expert
     </div>""", unsafe_allow_html=True)
 
 
 if __name__ == "__main__":
     main()
+    
