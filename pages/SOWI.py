@@ -691,11 +691,9 @@ def main():
         st.markdown("<br>", unsafe_allow_html=True)
         _, cc, _ = st.columns([1,2,1])
         with cc:
-            # Intenta usar st.page_link si está disponible (Streamlit >=1.31)
+            # CORREGIDO: ahora apunta al archivo principal "Energy Forecast.py"
             try:
-                # Primero intenta redirigir a la página principal (asume que el archivo se llama "Renewable Energy Forecast.py")
-                # Si no existe, captura la excepción y muestra un enlace manual.
-                st.page_link("Renewable Energy Forecast.py", label="⚡ Go to Forecast →", icon="🌞", use_container_width=True)
+                st.page_link("Energy Forecast.py", label="⚡ Go to Forecast →", icon="🌞", use_container_width=True)
             except Exception:
                 # Fallback: enlace HTML directo a la raíz de la app
                 st.markdown("""
