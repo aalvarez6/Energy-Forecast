@@ -4,7 +4,7 @@ Solar & Wind Forecast with Open-Meteo + LSTM
 FIXED VERSION — bugs corregidos y optimizado
 """
 
-_SOWI_AI_PAGE = "pages/Sowi AI Analyst.py"
+SOWI_AI_PAGE = "pages/Sowi AI Analyst.py"
 
 import streamlit as st
 import pandas as pd
@@ -1289,7 +1289,7 @@ if st.session_state.get("modelo_ejecutado"):
     _, cc, _ = st.columns([1, 2, 1])
     with cc:
         if st.button("🤖 Go to Sowi AI →", type="primary", use_container_width=True):
-            st.switch_page(_SOWI_AI_PAGE)
+            st.switch_page(SOWI_AI_PAGE)
 
     st.markdown(
         "<div class='footer'>⚡ Renewable Energy Forecast &nbsp;·&nbsp; "
