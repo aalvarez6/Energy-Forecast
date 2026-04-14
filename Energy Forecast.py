@@ -11,7 +11,8 @@ import pandas as pd
 import numpy as np
 import torch
 import torch.nn as nn
-import requests
+import OpenCageGeocodeimport requests
+from opencage.geocoder import OpenCageGeocode
 import altair as alt
 from datetime import datetime, timedelta
 import math
