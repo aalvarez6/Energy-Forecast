@@ -1,9 +1,10 @@
 """
 Renewable Energy Forecast — Energy Forecast.py
 Solar & Wind Forecast with Open-Meteo + LSTM
+Fixed: geocoding, map rendering, tensor shapes, normalization, cache conflicts
 """
 
-_SOWI_AI_PAGE = "pages/Sowi AI Analyst.py"
+_SOWI_AI_PAGE = "pages/Sowi_AI_Analyst.py"
 
 import streamlit as st
 import pandas as pd
@@ -14,10 +15,7 @@ import requests
 import altair as alt
 from datetime import datetime, timedelta
 import math
-import openmeteo_requests
-import requests_cache
-from retry_requests import retry
-from zoneinfo import ZoneInfo
+import time
 
 st.set_page_config(
     page_title="Renewable Energy Forecast",
@@ -27,7 +25,7 @@ st.set_page_config(
 )
 
 # ══════════════════════════════════════════════════════════════════════════════
-# CSS (raw string to avoid f-string brace issues)
+# CSS
 # ══════════════════════════════════════════════════════════════════════════════
 st.markdown(r"""
 <style>
@@ -108,25 +106,119 @@ h1,h2,h3,h4{ font-family:var(--font)!important;color:var(--t1)!important; }
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# Geocoding
+# GEOCODING — Multi-provider, robust, global coverage
 # ══════════════════════════════════════════════════════════════════════════════
 @st.cache_data(show_spinner=False, ttl=86400)
 def geocode(query: str):
-    headers = {"User-Agent": "RenewableEnergyForecast/2.0"}
-    for lang in ["en", "es", ""]:
+    """
+    Multi-provider geocoding with fallback chain:
+    1. Nominatim (OpenStreetMap) — global coverage
+    2. Open-Meteo geocoding API — fast, no rate limits
+    Returns (lat, lon, display_name) or (None, None, None)
+    """
+    query = query.strip()
+    if not query:
+        return None, None, None
+
+    headers = {
+        "User-Agent": "RenewableEnergyForecast/3.0 (energy-study@sowi.app)",
+        "Accept-Language": "en,es;q=0.9,*;q=0.5",
+        "Accept": "application/json",
+    }
+
+    # ── Provider 1: Nominatim ──────────────────────────────────────────────
+    nominatim_variants = [
+        {"q": query, "format": "json", "limit": 5, "addressdetails": 1,
+         "accept-language": "en", "extratags": 1},
+        # Try with countrycodes='' to ensure global (not filtered) results
+        {"q": query, "format": "json", "limit": 5, "addressdetails": 1,
+         "accept-language": "en", "countrycodes": ""},
+        # Last attempt: strip punctuation and try simpler query
+        {"q": query.replace(",", " ").replace("  ", " "), "format": "json",
+         "limit": 5, "accept-language": "en"},
+    ]
+    for params in nominatim_variants:
         try:
-            params = {"q": query, "format": "json", "limit": 1, "addressdetails": 1}
-            if lang:
-                params["accept-language"] = lang
-            r = requests.get("https://nominatim.openstreetmap.org/search",
-                             params=params, headers=headers, timeout=12)
+            time.sleep(1.1)  # Respect Nominatim 1-req/s policy
+            r = requests.get(
+                "https://nominatim.openstreetmap.org/search",
+                params=params, headers=headers, timeout=15
+            )
             r.raise_for_status()
-            res = r.json()
-            if res:
-                return float(res[0]["lat"]), float(res[0]["lon"]), res[0]["display_name"]
+            results = r.json()
+            if results:
+                best = results[0]
+                lat = float(best["lat"])
+                lon = float(best["lon"])
+                name = best.get("display_name", query)
+                return lat, lon, name
         except Exception:
             pass
+
+    # ── Provider 2: Open-Meteo Geocoding API ─────────────────────────────
+    # This API supports global cities without rate limits
+    try:
+        r = requests.get(
+            "https://geocoding-api.open-meteo.com/v1/search",
+            params={"name": query, "count": 5, "language": "en", "format": "json"},
+            timeout=15
+        )
+        r.raise_for_status()
+        data = r.json()
+        if data.get("results"):
+            best = data["results"][0]
+            lat  = float(best["latitude"])
+            lon  = float(best["longitude"])
+            parts = [best.get("name", "")]
+            if best.get("admin1"):
+                parts.append(best["admin1"])
+            if best.get("country"):
+                parts.append(best["country"])
+            name = ", ".join(p for p in parts if p)
+            return lat, lon, name
+    except Exception:
+        pass
+
+    # ── Provider 3: Photon (Komoot) — Europe & global coverage ────────────
+    try:
+        r = requests.get(
+            "https://photon.komoot.io/api/",
+            params={"q": query, "limit": 3, "lang": "en"},
+            timeout=15
+        )
+        r.raise_for_status()
+        data = r.json()
+        features = data.get("features", [])
+        if features:
+            coords = features[0]["geometry"]["coordinates"]
+            lon, lat = float(coords[0]), float(coords[1])
+            props = features[0].get("properties", {})
+            name_parts = [
+                props.get("name", ""),
+                props.get("state", ""),
+                props.get("country", "")
+            ]
+            name = ", ".join(p for p in name_parts if p) or query
+            return lat, lon, name
+    except Exception:
+        pass
+
     return None, None, None
+
+
+def parse_manual_coords(text: str):
+    """
+    Parse a string like '6.2500, -75.5600' or '6.25 -75.56' into (lat, lon).
+    Returns (None, None) if parsing fails.
+    """
+    text = text.strip().replace("°", "").replace(";", ",")
+    parts = text.replace(",", " ").split()
+    if len(parts) == 2:
+        try:
+            return float(parts[0]), float(parts[1])
+        except ValueError:
+            pass
+    return None, None
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -195,14 +287,11 @@ class LSTMMultivariate(nn.Module):
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# Open-Meteo data fetching
+# Open-Meteo data fetching — no requests_cache to avoid file conflicts
 # ══════════════════════════════════════════════════════════════════════════════
 @st.cache_data(ttl=3600, show_spinner=False)
 def load_openmeteo_data(lat, lon, start_date, end_date, energy_type="Solar"):
-    cache_session = requests_cache.CachedSession('.cache', expire_after=3600)
-    retry_session = retry(cache_session, retries=5, backoff_factor=0.2)
-    openmeteo     = openmeteo_requests.Client(session=retry_session)
-
+    """Fetch hourly historical data from Open-Meteo archive API."""
     if energy_type == "Solar":
         hourly_vars = ["shortwave_radiation", "temperature_2m",
                        "relative_humidity_2m", "wind_speed_10m", "cloud_cover"]
@@ -210,28 +299,42 @@ def load_openmeteo_data(lat, lon, start_date, end_date, energy_type="Solar"):
         hourly_vars = ["wind_speed_10m", "wind_gusts_10m", "temperature_2m"]
 
     params = {
-        "latitude": lat, "longitude": lon,
-        "start_date": start_date.strftime("%Y-%m-%d"),
-        "end_date":   end_date.strftime("%Y-%m-%d"),
-        "hourly": hourly_vars, "timezone": "auto",
+        "latitude":   lat,
+        "longitude":  lon,
+        "start_date": start_date.strftime("%Y-%m-%d") if hasattr(start_date, "strftime") else str(start_date),
+        "end_date":   end_date.strftime("%Y-%m-%d")   if hasattr(end_date,   "strftime") else str(end_date),
+        "hourly":     ",".join(hourly_vars),
+        "timezone":   "auto",
     }
+
     try:
-        resp   = openmeteo.weather_api(
-            "https://archive-api.open-meteo.com/v1/archive", params=params)[0]
-        hourly = resp.Hourly()
-        hv     = {v: hourly.Variables(i).ValuesAsNumpy()
-                  for i, v in enumerate(hourly_vars)}
-        n      = len(hv[hourly_vars[0]])
-        tz_raw = resp.Timezone()
-        tz     = ZoneInfo(tz_raw.decode() if isinstance(tz_raw, bytes) else str(tz_raw))
-        start_dt = datetime.fromtimestamp(hourly.Time(), tz=tz).replace(tzinfo=None)
-        dates    = [start_dt + timedelta(hours=i) for i in range(n)]
-        df = pd.DataFrame({"Datetime": dates, **hv}).set_index("Datetime").sort_index()
-        df = df.ffill().fillna(0)          # ← fixed deprecated method
-        df[df < 0] = 0
-        return df
+        r = requests.get(
+            "https://archive-api.open-meteo.com/v1/archive",
+            params=params, timeout=60
+        )
+        r.raise_for_status()
+        data = r.json()
+    except requests.exceptions.Timeout:
+        raise RuntimeError("Open-Meteo request timed out. Try a shorter date range.")
+    except requests.exceptions.ConnectionError:
+        raise RuntimeError("Cannot connect to Open-Meteo. Check your internet connection.")
     except Exception as e:
         raise RuntimeError(f"Open-Meteo error: {e}")
+
+    if "hourly" not in data:
+        raise RuntimeError(f"Open-Meteo returned no hourly data: {data.get('reason', 'unknown error')}")
+
+    hourly = data["hourly"]
+    times  = pd.to_datetime(hourly["time"])
+    df_dict = {"Datetime": times}
+    for v in hourly_vars:
+        if v in hourly:
+            df_dict[v] = np.array(hourly[v], dtype=float)
+
+    df = pd.DataFrame(df_dict).set_index("Datetime").sort_index()
+    df = df.ffill().bfill().fillna(0)
+    df[df < 0] = 0
+    return df
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -240,10 +343,9 @@ def load_openmeteo_data(lat, lon, start_date, end_date, energy_type="Solar"):
 def make_seed_sequence_solar(df, seq_len, lat):
     if not len(df):
         return np.zeros(seq_len)
-    # last 24 hours (daytime only)
     last_day = df.index[-1].date()
     prev_day = last_day - timedelta(days=1)
-    recent = df[df.index.date >= prev_day]
+    recent   = df[df.index.date >= prev_day]
     vals = []
     for dt, row in recent.iterrows():
         sr, ss = solar_window(lat, dt)
@@ -277,13 +379,16 @@ def make_future_dates(last_dt, n_steps):
 
 
 def normalize_data(data):
-    m, s = data.mean(), data.std()
-    return (data - m) / (s if s > 1e-8 else 1.0), m, float(s if s > 1e-8 else 1.0)
+    m = float(data.mean())
+    s = float(data.std())
+    s = s if s > 1e-8 else 1.0
+    return (data - m) / s, m, s
 
 
 def normalize_features(df):
     means = df.mean()
-    stds = df.std().replace(0, 1)
+    stds  = df.std()
+    stds  = stds.where(stds > 1e-8, 1.0)  # FIX: replace zeros properly
     return (df - means) / stds, means, stds
 
 
@@ -304,70 +409,104 @@ def create_sequences_mv(features, target, seq_len):
 
 
 def train_model(model, X, y, epochs, pb, lr=0.005):
-    opt    = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=1e-5)
-    sched  = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=epochs)
-    fn     = nn.HuberLoss()
+    opt   = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=1e-5)
+    sched = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=epochs)
+    fn    = nn.HuberLoss()
     losses = []
     for e in range(epochs):
         model.train()
         opt.zero_grad()
         loss = fn(model(X).squeeze(), y)
         loss.backward()
+        nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)  # FIX: gradient clipping
         opt.step()
         sched.step()
-        losses.append(loss.item())
+        losses.append(float(loss.item()))
         pb.progress((e + 1) / epochs)
     return model, losses
 
 
 def predict_univariate(model, seed, n, m, s):
+    """
+    FIX: corrected tensor shape handling for autoregressive prediction.
+    seed shape: (seq_len, 1) — 2D tensor
+    """
     model.eval()
     preds = []
-    cur = seed.clone()
+    # Ensure seed is 2D: (seq_len, 1)
+    cur = seed.view(-1, 1).clone()  # shape: (seq_len, 1)
     with torch.no_grad():
         for _ in range(n):
-            o = model(cur.view(1, -1, 1))
-            val = o.item()
+            inp = cur.unsqueeze(0)          # shape: (1, seq_len, 1)
+            val = float(model(inp).item())
             preds.append(val)
-            # Append new value as tensor on same device
-            new_val = torch.tensor([[val]], device=cur.device, dtype=cur.dtype)
-            cur = torch.cat((cur[1:], new_val), dim=0)
+            new_val = torch.tensor([[val]], dtype=cur.dtype)  # shape: (1, 1)
+            cur = torch.cat([cur[1:], new_val], dim=0)        # shape: (seq_len, 1)
     return np.array(preds) * s + m
 
 
 def predict_multivariate(model, seed, n, target_m, target_s):
+    """
+    FIX: corrected tensor handling for multivariate autoregressive prediction.
+    seed shape: (seq_len, n_features)
+    """
     model.eval()
     preds = []
-    cur = seed.clone()
+    cur = seed.clone()  # (seq_len, n_features)
     with torch.no_grad():
         for _ in range(n):
-            v = model(cur.unsqueeze(0)).item()
+            inp = cur.unsqueeze(0)           # (1, seq_len, n_features)
+            v   = float(model(inp).item())
             preds.append(v)
-            ns = cur[-1].clone()
-            ns[0] = v
-            cur = torch.cat((cur[1:], ns.unsqueeze(0)), dim=0)
-    return np.array(preds) * target_s + target_m
+            # Roll window: drop first row, append copy of last row with updated target
+            new_row = cur[-1].clone()
+            new_row[0] = v                   # update target feature (index 0)
+            cur = torch.cat([cur[1:], new_row.unsqueeze(0)], dim=0)
+    return np.array(preds) * float(target_s) + float(target_m)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# Map
+# Map rendering — robust, always works
 # ══════════════════════════════════════════════════════════════════════════════
-def render_map(lat, lon):
+def render_map(lat, lon, location_name=""):
+    """Render location map with multiple fallback strategies."""
     st.markdown(
         f"<div style='font-size:.68rem;color:#8888a0;margin-bottom:4px'>"
         f"📌 Lat <b style='color:#f5b432'>{lat:.4f}°</b>&nbsp;|&nbsp;"
-        f"Lon <b style='color:#f5b432'>{lon:.4f}°</b></div>",
-        unsafe_allow_html=True)
+        f"Lon <b style='color:#f5b432'>{lon:.4f}°</b>"
+        + (f"&nbsp;|&nbsp;<span style='color:#eeeef4'>{location_name[:60]}</span>" if location_name else "")
+        + "</div>",
+        unsafe_allow_html=True
+    )
+
+    map_df = pd.DataFrame({"lat": [lat], "lon": [lon]})
+
+    # Try st.map (works in Streamlit >= 1.18)
     try:
-        st.map(pd.DataFrame({"lat": [lat], "lon": [lon]}),
-               zoom=6, use_container_width=True, height=260)
-    except TypeError:
-        st.markdown(
-            f'<iframe width="100%" height="260" style="border:none;border-radius:12px" '
-            f'src="https://www.openstreetmap.org/export/embed.html'
-            f'?bbox={lon - .5}%2C{lat - .5}%2C{lon + .5}%2C{lat + .5}'
-            f'&layer=mapnik&marker={lat}%2C{lon}" loading="lazy"></iframe>',
-            unsafe_allow_html=True)
+        st.map(map_df, zoom=5, use_container_width=True, height=260)
+        return
+    except Exception:
+        pass
+
+    # Fallback: OpenStreetMap iframe — always works
+    bbox_pad = 2.5
+    lat_min = lat - bbox_pad
+    lat_max = lat + bbox_pad
+    lon_min = lon - bbox_pad
+    lon_max = lon + bbox_pad
+
+    osm_url = (
+        f"https://www.openstreetmap.org/export/embed.html"
+        f"?bbox={lon_min:.4f}%2C{lat_min:.4f}%2C{lon_max:.4f}%2C{lat_max:.4f}"
+        f"&layer=mapnik&marker={lat:.6f}%2C{lon:.6f}"
+    )
+    st.markdown(
+        f'<iframe width="100%" height="260" frameborder="0" scrolling="no" '
+        f'marginheight="0" marginwidth="0" '
+        f'style="border:1px solid rgba(255,255,255,0.08);border-radius:12px;display:block" '
+        f'src="{osm_url}" loading="lazy"></iframe>',
+        unsafe_allow_html=True,
+    )
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -390,7 +529,8 @@ alt.themes.enable("dark")
 # Flat-prediction warning helper
 # ══════════════════════════════════════════════════════════════════════════════
 def check_flat_prediction(preds: np.ndarray, label: str = "prediction") -> None:
-    if preds.std() < 0.05 * (preds.max() - preds.min() + 1e-8):
+    rng = preds.max() - preds.min()
+    if rng > 0 and preds.std() < 0.05 * (rng + 1e-8):
         st.warning(
             f"⚠️ The {label} looks unusually flat (std ≈ {preds.std():.3f}). "
             "This can happen with very short training or when the model converges "
@@ -518,7 +658,7 @@ def render_solar_dashboard(df, predictions, future_dates, lat):
                 y=alt.Y("Avg GHI:Q", title="Avg GHI (W/m²)"),
                 tooltip=["Hour of day:O", alt.Tooltip("Avg GHI:Q", format=".1f")]
             ).properties(height=300).interactive(), use_container_width=True)
-        psh = havg["Avg GHI"].sum() / 1000.0
+        psh  = havg["Avg GHI"].sum() / 1000.0
         gmax = havg["Avg GHI"].max()
         st.metric("☀️ Avg Peak Sun Hours (PSH)", f"{psh:.2f} h/day")
         rec = ("≥110% DC peak" if gmax > 800 else
@@ -548,11 +688,11 @@ def render_solar_dashboard(df, predictions, future_dates, lat):
         hv = float(hist_h.get(h, 0))
         pv = float(pred_h.get(h, 0))
         av = (hv + pv) / 2 if pv else hv
-        period = ("🌙 Night"     if h < sr - .5 or h > ss + .5 else
-                  "🌅 Dawn"      if h <= sr + 1 else
-                  "☀️ Morning"   if h <= 11 else
+        period = ("🌙 Night"      if h < sr - .5 or h > ss + .5 else
+                  "🌅 Dawn"       if h <= sr + 1 else
+                  "☀️ Morning"    if h <= 11 else
                   "🔆 Solar noon" if h <= 13 else
-                  "🌤️ Afternoon" if h <= ss - 1 else "🌇 Twilight")
+                  "🌤️ Afternoon"  if h <= ss - 1 else "🌇 Twilight")
         rows.append({"Hour": f"{h:02d}:00",
                      "Hist GHI (W/m²)":     round(max(hv, 0), 1),
                      "Forecast GHI (W/m²)": round(max(pv, 0), 1),
@@ -569,7 +709,7 @@ def render_solar_dashboard(df, predictions, future_dates, lat):
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# Wind dashboard — GREEN theme
+# Wind dashboard
 # ══════════════════════════════════════════════════════════════════════════════
 def render_wind_dashboard(df, predictions, future_dates):
     GC  = "#22c55e"
@@ -715,9 +855,9 @@ def render_wind_dashboard(df, predictions, future_dates):
 
     with st.expander("📋 Full wind forecast table"):
         st.dataframe(pd.DataFrame({
-            "Date & Time (local)":    [d.strftime("%Y-%m-%d %H:%M") for d in future_dates],
-            "Wind Speed (m/s)":       preds.round(2),
-            "Power Density (W/m²)":   power_density.round(1)}),
+            "Date & Time (local)":  [d.strftime("%Y-%m-%d %H:%M") for d in future_dates],
+            "Wind Speed (m/s)":     preds.round(2),
+            "Power Density (W/m²)": power_density.round(1)}),
             use_container_width=True, height=300)
     return preds
 
@@ -755,34 +895,67 @@ with st.sidebar:
         options=["🔍 Search by city", "📐 Manual coordinates"],
         key="loc_mode_radio", label_visibility="collapsed")
 
-    for k, v in [("geo_lat", 6.2500), ("geo_lon", -75.5600), ("geo_name", "")]:
+    # Initialize session state defaults
+    for k, v in [("geo_lat", 6.2500), ("geo_lon", -75.5600), ("geo_name", "Medellín, Antioquia, Colombia")]:
         if k not in st.session_state:
             st.session_state[k] = v
 
     if loc_mode == "🔍 Search by city":
         city_query = st.text_input(
             "City, region or country",
-            value=st.session_state.get("city_query", "Medellín, Colombia"),
-            placeholder="e.g.  Paris, France  ·  Tokyo  ·  New York, USA",
+            value=st.session_state.get("city_query_val", "Medellín, Colombia"),
+            placeholder="e.g. Tokyo · Dubai · Berlin, Germany · São Paulo",
             key="city_input")
-        st.caption("💡 Include the country for better results: 'Cali, Colombia'")
+        st.caption("💡 Works worldwide: Tokyo, Dubai, Nairobi, Sydney, New York…")
 
-        if st.button("🔍 Search", use_container_width=True, type="primary"):
-            with st.spinner("Searching…"):
-                fl, fn, fname = geocode(city_query.strip())
-            if fl is not None:
-                st.session_state.update({
-                    "geo_lat": fl, "geo_lon": fn,
-                    "geo_name": fname, "city_query": city_query})
-                st.success("📌 Location found!")
+        col_search, col_clear = st.columns([3, 1])
+        with col_search:
+            do_search = st.button("🔍 Search", use_container_width=True, type="primary")
+        with col_clear:
+            if st.button("✕", use_container_width=True, help="Clear"):
+                st.session_state["city_query_val"] = ""
+                st.rerun()
+
+        if do_search:
+            if not city_query.strip():
+                st.error("Please enter a location name.")
             else:
-                st.error("❌ Not found. Try adding the country name.")
+                with st.spinner(f"Searching for '{city_query}'…"):
+                    fl, fn, fname = geocode(city_query.strip())
+                if fl is not None:
+                    st.session_state.update({
+                        "geo_lat": fl,
+                        "geo_lon": fn,
+                        "geo_name": fname,
+                        "city_query_val": city_query,
+                    })
+                    st.success(f"📌 Found! {fname[:60]}")
+                    st.rerun()
+                else:
+                    st.error(
+                        "❌ Location not found. Tips:\n"
+                        "• Add the country: 'Cali, Colombia'\n"
+                        "• Use English names: 'Munich' not 'München'\n"
+                        "• Try coordinates mode for remote areas"
+                    )
 
-    else:
+    else:  # Manual coordinates
         st.markdown(
             "<div style='font-size:.72rem;color:#8888a0;margin-bottom:.3rem'>"
             "Enter coordinates then click Apply.</div>",
             unsafe_allow_html=True)
+
+        # Also allow paste of "lat, lon" string
+        coord_paste = st.text_input(
+            "Paste coordinates (lat, lon)",
+            placeholder="e.g. 6.2500, -75.5600",
+            key="coord_paste",
+        )
+        if coord_paste.strip():
+            pl, pn = parse_manual_coords(coord_paste)
+            if pl is not None:
+                st.caption(f"✅ Parsed: {pl:.4f}°, {pn:.4f}°")
+
         new_lat = st.number_input("Latitude  (−90 to 90)",
                                   min_value=-90.0, max_value=90.0,
                                   value=float(st.session_state["geo_lat"]),
@@ -791,13 +964,27 @@ with st.sidebar:
                                   min_value=-180.0, max_value=180.0,
                                   value=float(st.session_state["geo_lon"]),
                                   step=0.0001, format="%.4f", key="manual_lon")
-        if st.button("✅ Apply coordinates", use_container_width=True, type="primary"):
-            st.session_state.update({
-                "geo_lat": new_lat, "geo_lon": new_lon,
-                "geo_name": f"Manual: {new_lat:.4f}°, {new_lon:.4f}°"})
-            st.success("📐 Coordinates set!")
 
-    if st.session_state["geo_name"]:
+        if st.button("✅ Apply coordinates", use_container_width=True, type="primary"):
+            # If paste field has valid coords, prefer those
+            if coord_paste.strip():
+                pl, pn = parse_manual_coords(coord_paste)
+                if pl is not None:
+                    new_lat, new_lon = pl, pn
+
+            if not (-90 <= new_lat <= 90 and -180 <= new_lon <= 180):
+                st.error("Coordinates out of valid range.")
+            else:
+                st.session_state.update({
+                    "geo_lat": new_lat,
+                    "geo_lon": new_lon,
+                    "geo_name": f"Manual: {new_lat:.4f}°, {new_lon:.4f}°"
+                })
+                st.success("📐 Coordinates applied!")
+                st.rerun()
+
+    # Show current location pill
+    if st.session_state.get("geo_name"):
         bc = "#f5b432" if loc_mode == "🔍 Search by city" else "#22c55e"
         bb = "rgba(245,180,50,.08)" if loc_mode == "🔍 Search by city" else "rgba(34,197,94,.08)"
         bd = "rgba(245,180,50,.2)"  if loc_mode == "🔍 Search by city" else "rgba(34,197,94,.2)"
@@ -805,7 +992,7 @@ with st.sidebar:
             f"<div style='background:{bb};border:1px solid {bd};"
             f"border-radius:8px;padding:.4rem .7rem;font-size:.7rem;color:{bc};"
             f"margin:.3rem 0;line-height:1.5;word-break:break-word'>"
-            f"{st.session_state['geo_name'][:100]}</div>",
+            f"📍 {st.session_state['geo_name'][:100]}</div>",
             unsafe_allow_html=True)
 
     lat = st.session_state["geo_lat"]
@@ -818,14 +1005,15 @@ with st.sidebar:
         "color:#44445a;margin-bottom:.5rem'>📅 Historical Data Range</div>",
         unsafe_allow_html=True)
     om_min        = datetime(1940, 1, 1).date()
-    om_max        = (datetime.today() - timedelta(days=1)).date()
+    om_max        = (datetime.today() - timedelta(days=5)).date()  # FIX: safe buffer
     default_start = max((datetime.today() - timedelta(days=365 * 2)).date(), om_min)
     date_start    = st.date_input("Start date", value=default_start,
                                   min_value=om_min, max_value=om_max, key="ds")
     date_end      = st.date_input("End date", value=om_max,
                                   min_value=om_min, max_value=om_max, key="de")
     if date_start >= date_end:
-        st.error("Start date must be before end date.")
+        st.error("⚠️ Start date must be before end date.")
+        st.stop()
 
     # ── Model params ──────────────────────────────────────────────────────────
     st.markdown("---")
@@ -848,7 +1036,7 @@ with st.sidebar:
         key="forecast_mode_radio", label_visibility="collapsed",
         help="Standard: fast · Day-Ahead: stacked LSTM · Multivariable: weather features")
 
-    pred_steps = 48
+    pred_steps      = 48
     da_hidden_sizes = (64, 32, 16)
     use_temp = use_humidity = use_wind_feat = use_cloud = False
 
@@ -862,9 +1050,9 @@ with st.sidebar:
             options=["Small (64→32→16)", "Medium (128→64→32)", "Large (256→128→64)"],
             value="Small (64→32→16)")
         da_hidden_sizes = {
-            "Small (64→32→16)":    (64, 32, 16),
-            "Medium (128→64→32)":  (128, 64, 32),
-            "Large (256→128→64)":  (256, 128, 64)}[da_hidden]
+            "Small (64→32→16)":   (64, 32, 16),
+            "Medium (128→64→32)": (128, 64, 32),
+            "Large (256→128→64)": (256, 128, 64)}[da_hidden]
     elif modo == "Multivariable":
         pred_steps = st.slider("Hours to forecast", 24, 240, 48, step=24)
         st.markdown(
@@ -876,7 +1064,7 @@ with st.sidebar:
             use_wind_feat = st.checkbox("💨 Wind speed",  value=False)
             use_cloud     = st.checkbox("☁️ Cloud cover", value=True)
         else:
-            st.info("Temperature + wind gusts are used automatically.")
+            st.info("Temperature + wind gusts used automatically.")
 
     st.markdown("---")
     st.markdown(
@@ -890,7 +1078,7 @@ with st.sidebar:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# Hero  — plain string concat, zero f-string CSS brace risk
+# Hero
 # ══════════════════════════════════════════════════════════════════════════════
 hero_color    = "#f5b432" if energy_type == "Solar" else "#22c55e"
 hero_subtitle = ("Solar irradiance prediction with LSTM" if energy_type == "Solar"
@@ -913,7 +1101,7 @@ with col_map:
         "<div style='font-size:.7rem;text-transform:uppercase;letter-spacing:.1em;"
         "color:#44445a;margin-bottom:.6rem'>🗺️ Selected Location</div>",
         unsafe_allow_html=True)
-    render_map(lat, lon)
+    render_map(lat, lon, st.session_state.get("geo_name", ""))
 
 with col_info:
     accent = "#f5b432" if energy_type == "Solar" else "#22c55e"
@@ -940,12 +1128,12 @@ with col_info:
     loc_label = (st.session_state.get("geo_name", "") or f"{lat:.4f}°, {lon:.4f}°")[:42]
 
     info_rows = [
-        ("Location",     loc_label,         "#eeeef4"),
-        ("Energy type",  energy_type,        accent),
-        ("Mode",         modo,               accent),
-        ("Horizon",      str(pred_steps) + " h", "#eeeef4"),
-        ("Window",       str(seq_len) + " h",    "#eeeef4"),
-        ("Data range",   str(date_start) + " → " + str(date_end), "#eeeef4"),
+        ("Location",    loc_label,                              "#eeeef4"),
+        ("Energy type", energy_type,                            accent),
+        ("Mode",        modo,                                   accent),
+        ("Horizon",     str(pred_steps) + " h",                "#eeeef4"),
+        ("Window",      str(seq_len) + " h",                   "#eeeef4"),
+        ("Data range",  str(date_start) + " → " + str(date_end), "#eeeef4"),
     ]
     rows_html = "".join(
         f"<div style='display:flex;justify-content:space-between;font-size:.78rem'>"
@@ -986,6 +1174,13 @@ if run:
             st.error(str(e))
             st.stop()
 
+    if len(df) < seq_len + 10:
+        st.error(
+            f"Not enough data ({len(df)} rows). "
+            "Please extend the date range or reduce the time window."
+        )
+        st.stop()
+
     st.success(f"✅ {len(df):,} records loaded  ·  {df.index.min().date()} → {df.index.max().date()}")
 
     with st.expander("🔍 Data preview (last 72 h local time)"):
@@ -1003,18 +1198,18 @@ if run:
                 '<span class="meta">· LSTM 2-layer</span></div>',
                 unsafe_allow_html=True)
             with st.spinner("🧠 Training…"):
-                data = df[target_col].values.ravel()
+                data  = df[target_col].values.ravel()
                 dn, m, s = normalize_data(data)
-                X, y = create_sequences(dn, seq_len)
+                X, y  = create_sequences(dn, seq_len)
                 X = torch.FloatTensor(X).view(-1, seq_len, 1)
-                y = torch.FloatTensor(y).view(-1)
+                y = torch.FloatTensor(y)
                 model = LSTMPredictor()
-                pb = st.progress(0)
+                pb    = st.progress(0)
                 model, _ = train_model(model, X, y, epochs, pb)
             st.success("✅ Model trained")
-            seed_n = (make_seed_sequence_solar(df, seq_len, lat) - m) / (s or 1)
+            seed_n = (make_seed_sequence_solar(df, seq_len, lat) - m) / s
             predictions = predict_univariate(
-                model, torch.FloatTensor(seed_n).view(-1, 1), pred_steps, m, s)
+                model, torch.FloatTensor(seed_n), pred_steps, m, s)
 
         elif modo == "Day-Ahead":
             st.markdown(
@@ -1022,13 +1217,13 @@ if run:
                 '<span class="meta">· Stacked LSTM</span></div>',
                 unsafe_allow_html=True)
             with st.spinner("🧠 Training stacked LSTM…"):
-                data = df[target_col].values.ravel()
+                data  = df[target_col].values.ravel()
                 dn, m, s = normalize_data(data)
-                X, y = create_sequences(dn, seq_len)
+                X, y  = create_sequences(dn, seq_len)
                 X = torch.FloatTensor(X).view(-1, seq_len, 1)
-                y = torch.FloatTensor(y).view(-1)
+                y = torch.FloatTensor(y)
                 model = StackedLSTMDayAhead(input_size=1, hidden_sizes=da_hidden_sizes)
-                pb = st.progress(0)
+                pb    = st.progress(0)
                 model, losses = train_model(model, X, y, epochs, pb)
             st.success("✅ Stacked LSTM trained")
             with st.expander("📉 Training loss"):
@@ -1038,9 +1233,9 @@ if run:
                     .encode(x="Epoch:Q", y=alt.Y("Loss:Q", title="Huber Loss"))
                     .properties(height=200).interactive(),
                     use_container_width=True)
-            seed_n = (make_seed_sequence_solar(df, seq_len, lat) - m) / (s or 1)
+            seed_n = (make_seed_sequence_solar(df, seq_len, lat) - m) / s
             predictions = predict_univariate(
-                model, torch.FloatTensor(seed_n).view(-1, 1), pred_steps, m, s)
+                model, torch.FloatTensor(seed_n), pred_steps, m, s)
 
         elif modo == "Multivariable":
             feature_cols = [target_col]
@@ -1048,7 +1243,9 @@ if run:
             if use_humidity:  feature_cols.append("relative_humidity_2m")
             if use_wind_feat: feature_cols.append("wind_speed_10m")
             if use_cloud:     feature_cols.append("cloud_cover")
-            if len(feature_cols) == 1:
+            # Keep only existing columns
+            feature_cols = [c for c in feature_cols if c in df.columns]
+            if len(feature_cols) < 2:
                 st.warning("⚠️ Select at least one additional feature.")
                 st.stop()
             st.markdown(
@@ -1058,18 +1255,21 @@ if run:
             with st.spinner("🧠 Training multivariable model…"):
                 df_f = df[feature_cols].copy()
                 df_n, medias, desv = normalize_features(df_f)
-                fa = df_n.values
-                ta = df_n[target_col].values
+                fa = df_n.values.astype(np.float32)
+                ta = df_n[target_col].values.astype(np.float32)
                 X, y = create_sequences_mv(fa, ta, seq_len)
-                X = torch.FloatTensor(X).view(-1, seq_len, len(feature_cols))
-                y = torch.FloatTensor(y).view(-1)
+                X = torch.FloatTensor(X)
+                y = torch.FloatTensor(y)
                 model = LSTMMultivariate(input_size=len(feature_cols))
-                pb = st.progress(0)
+                pb    = st.progress(0)
                 model, _ = train_model(model, X, y, epochs, pb)
             st.success("✅ Multivariable model trained")
             predictions = predict_multivariate(
-                model, torch.FloatTensor(fa[-seq_len:]), pred_steps,
-                medias[target_col], desv[target_col])
+                model,
+                torch.FloatTensor(fa[-seq_len:]),
+                pred_steps,
+                float(medias[target_col]),
+                float(desv[target_col]))
 
         min_len = min(len(predictions), len(future_dates))
         predictions, future_dates = predictions[:min_len], future_dates[:min_len]
@@ -1084,18 +1284,18 @@ if run:
                 '<span class="meta">· LSTM 2-layer</span></div>',
                 unsafe_allow_html=True)
             with st.spinner("🧠 Training wind model…"):
-                data = df[target_col].values.ravel()
+                data  = df[target_col].values.ravel()
                 dn, m, s = normalize_data(data)
-                X, y = create_sequences(dn, seq_len)
+                X, y  = create_sequences(dn, seq_len)
                 X = torch.FloatTensor(X).view(-1, seq_len, 1)
-                y = torch.FloatTensor(y).view(-1)
+                y = torch.FloatTensor(y)
                 model = LSTMPredictor()
-                pb = st.progress(0)
+                pb    = st.progress(0)
                 model, _ = train_model(model, X, y, epochs, pb)
             st.success("✅ Wind model trained")
-            seed_n = (make_seed_sequence_wind(df, seq_len) - m) / (s or 1)
+            seed_n = (make_seed_sequence_wind(df, seq_len) - m) / s
             predictions = predict_univariate(
-                model, torch.FloatTensor(seed_n).view(-1, 1), pred_steps, m, s)
+                model, torch.FloatTensor(seed_n), pred_steps, m, s)
 
         elif modo == "Day-Ahead":
             st.markdown(
@@ -1103,13 +1303,13 @@ if run:
                 '<span class="meta">· Stacked LSTM</span></div>',
                 unsafe_allow_html=True)
             with st.spinner("🧠 Training stacked LSTM for wind…"):
-                data = df[target_col].values.ravel()
+                data  = df[target_col].values.ravel()
                 dn, m, s = normalize_data(data)
-                X, y = create_sequences(dn, seq_len)
+                X, y  = create_sequences(dn, seq_len)
                 X = torch.FloatTensor(X).view(-1, seq_len, 1)
-                y = torch.FloatTensor(y).view(-1)
+                y = torch.FloatTensor(y)
                 model = StackedLSTMDayAhead(input_size=1, hidden_sizes=da_hidden_sizes)
-                pb = st.progress(0)
+                pb    = st.progress(0)
                 model, losses = train_model(model, X, y, epochs, pb)
             st.success("✅ Stacked LSTM trained")
             with st.expander("📉 Training loss"):
@@ -1119,15 +1319,18 @@ if run:
                     .encode(x="Epoch:Q", y=alt.Y("Loss:Q", title="Huber Loss"))
                     .properties(height=200).interactive(),
                     use_container_width=True)
-            seed_n = (make_seed_sequence_wind(df, seq_len) - m) / (s or 1)
+            seed_n = (make_seed_sequence_wind(df, seq_len) - m) / s
             predictions = predict_univariate(
-                model, torch.FloatTensor(seed_n).view(-1, 1), pred_steps, m, s)
+                model, torch.FloatTensor(seed_n), pred_steps, m, s)
 
         elif modo == "Multivariable":
             feature_cols = [target_col]
-            if use_temp: feature_cols.append("temperature_2m")
-            if "wind_gusts_10m" in df.columns: feature_cols.append("wind_gusts_10m")
-            if len(feature_cols) == 1:
+            if use_temp and "temperature_2m" in df.columns:
+                feature_cols.append("temperature_2m")
+            if "wind_gusts_10m" in df.columns:
+                feature_cols.append("wind_gusts_10m")
+            feature_cols = [c for c in feature_cols if c in df.columns]
+            if len(feature_cols) < 2:
                 st.warning("⚠️ No additional features available.")
                 st.stop()
             st.markdown(
@@ -1137,28 +1340,37 @@ if run:
             with st.spinner("🧠 Training multivariable wind model…"):
                 df_f = df[feature_cols].copy()
                 df_n, medias, desv = normalize_features(df_f)
-                fa = df_n.values
-                ta = df_n[target_col].values
+                fa = df_n.values.astype(np.float32)
+                ta = df_n[target_col].values.astype(np.float32)
                 X, y = create_sequences_mv(fa, ta, seq_len)
-                X = torch.FloatTensor(X).view(-1, seq_len, len(feature_cols))
-                y = torch.FloatTensor(y).view(-1)
+                X = torch.FloatTensor(X)
+                y = torch.FloatTensor(y)
                 model = LSTMMultivariate(input_size=len(feature_cols))
-                pb = st.progress(0)
+                pb    = st.progress(0)
                 model, _ = train_model(model, X, y, epochs, pb)
             st.success("✅ Multivariable wind model trained")
             predictions = predict_multivariate(
-                model, torch.FloatTensor(fa[-seq_len:]), pred_steps,
-                medias[target_col], desv[target_col])
+                model,
+                torch.FloatTensor(fa[-seq_len:]),
+                pred_steps,
+                float(medias[target_col]),
+                float(desv[target_col]))
 
         predictions = np.clip(predictions, 0, None)
-        min_len = min(len(predictions), len(future_dates))
+        min_len     = min(len(predictions), len(future_dates))
         predictions, future_dates = predictions[:min_len], future_dates[:min_len]
 
     st.session_state.update({
-        "predictions": predictions, "future_dates": future_dates,
-        "df": df, "lat": lat, "lon": lon,
-        "date_start": str(date_start), "date_end": str(date_end),
-        "modo": modo, "energy_type": energy_type, "modelo_ejecutado": True,
+        "predictions":      predictions,
+        "future_dates":     future_dates,
+        "df":               df,
+        "lat":              lat,
+        "lon":              lon,
+        "date_start":       str(date_start),
+        "date_end":         str(date_end),
+        "modo":             modo,
+        "energy_type":      energy_type,
+        "modelo_ejecutado": True,
     })
 
 
@@ -1195,7 +1407,10 @@ if st.session_state.get("modelo_ejecutado"):
     _, cc, _ = st.columns([1, 2, 1])
     with cc:
         if st.button("🤖 Go to Sowi AI →", type="primary", use_container_width=True):
-            st.switch_page(_SOWI_AI_PAGE)
+            try:
+                st.switch_page(_SOWI_AI_PAGE)
+            except Exception:
+                st.info("Navigate to **Sowi AI Analyst** from the sidebar.")
 
     st.markdown(
         "<div class='footer'>⚡ Renewable Energy Forecast &nbsp;·&nbsp; "
