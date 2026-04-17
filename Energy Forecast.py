@@ -1,8 +1,15 @@
 """
-Renewable Energy Forecast — Energy Forecast.py
+Renewable Energy Forecast — Energy_Forecast.py
 Solar & Wind Forecast with Open-Meteo + LSTM
+
+⚠️  IMPORTANT — FILENAME:
+    This file MUST be saved as  Energy_Forecast.py  (underscore, NO space).
+    A space in the filename causes Python's tokenizer to crash on @st.cache_data.
+    In your GitHub repo, rename  "Energy Forecast.py"  →  "Energy_Forecast.py"
+
 Fixed: pandas 3.x groupby, normalize_features, tensor shapes, altair theme,
-       seed sequence NaN, default hyperparams, use_container_width deprecation
+       seed sequence NaN, default hyperparams, use_container_width deprecation,
+       TokenError from filename with space.
 """
 
 # ── Navigation: set this to the exact path of your Sowi AI page ──
@@ -34,6 +41,18 @@ import altair as alt
 from datetime import datetime, timedelta
 import math
 import time
+import os
+
+# ── Runtime guard: filename with spaces crashes @st.cache_data via tokenizer ──
+_THIS_FILE = os.path.basename(__file__)
+if " " in _THIS_FILE:
+    st.error(
+        f"**Filename error:** `{_THIS_FILE}` contains a space.\n\n"
+        "Rename the file to **`Energy_Forecast.py`** (underscore) in your GitHub repo "
+        "and redeploy. Python's `tokenize` module crashes on `@st.cache_data` "
+        "when the source file has spaces in its name."
+    )
+    st.stop()
 
 st.set_page_config(
     page_title="Renewable Energy Forecast",
