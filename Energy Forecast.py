@@ -218,10 +218,9 @@ def apply_solar_mask(preds: np.ndarray, dates: list, lat: float) -> np.ndarray:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# LSTM models — forzados a small (64-32-16) para CPU de Streamlit Cloud
+# LSTM models
 # ══════════════════════════════════════════════════════════════════════════════
 class LSTMPredictor(nn.Module):
-    """LSTM estándar 2 capas, hidden=64 — rápido y estable en CPU."""
     def __init__(self, input_size=1, hidden_size=64):
         super().__init__()
         self.lstm = nn.LSTM(input_size, hidden_size, num_layers=2,
@@ -234,10 +233,6 @@ class LSTMPredictor(nn.Module):
 
 
 class StackedLSTMDayAhead(nn.Module):
-    """
-    Stacked LSTM 3 capas.
-    FIX: default hidden_sizes reducidos a (64,32,16) para evitar OOM en CPU.
-    """
     def __init__(self, input_size=1, hidden_sizes=(64, 32, 16), dropout=0.2):
         super().__init__()
         self.lstm1 = nn.LSTM(input_size,      hidden_sizes[0], batch_first=True)
@@ -319,10 +314,6 @@ def load_openmeteo_data(lat, lon, start_date, end_date, energy_type="Solar"):
 # Helpers
 # ══════════════════════════════════════════════════════════════════════════════
 def make_seed_sequence_solar(df, seq_len, lat):
-    """
-    FIX: garantiza que el seed nunca sea todo-ceros por ventana solar vacía.
-    Si no hay horas solares en los últimos 2 días, usa los últimos seq_len valores.
-    """
     if not len(df):
         return np.zeros(seq_len)
     last_day = df.index[-1].date()
@@ -335,7 +326,6 @@ def make_seed_sequence_solar(df, seq_len, lat):
         if sr - 0.5 <= h <= ss + 0.5:
             vals.append(float(row["shortwave_radiation"]))
 
-    # FIX: fallback robusto — nunca retorna array vacío
     if len(vals) == 0:
         arr = df["shortwave_radiation"].values[-seq_len:].astype(float)
     else:
@@ -344,7 +334,6 @@ def make_seed_sequence_solar(df, seq_len, lat):
     if len(arr) < seq_len:
         arr = np.concatenate([np.zeros(seq_len - len(arr)), arr])
 
-    # FIX: reemplazar NaN que puedan venir del dataframe
     arr = np.nan_to_num(arr, nan=0.0)
     return arr[-seq_len:]
 
@@ -368,7 +357,6 @@ def make_future_dates(last_dt, n_steps):
 
 
 def normalize_data(data):
-    """Normalización univariada robusta."""
     data = np.nan_to_num(data, nan=0.0)
     m = float(np.mean(data))
     s = float(np.std(data))
@@ -377,17 +365,11 @@ def normalize_data(data):
 
 
 def normalize_features(df):
-    """
-    FIX pandas 3.x: evita usar Series.where() sobre std — usa numpy directamente
-    para calcular mean/std y reemplazar ceros, compatible con pandas 2.x y 3.x.
-    """
     means = df.mean()
     stds  = df.std()
-    # FIX: reemplazar std ≤ 1e-8 con 1.0 usando numpy (no Series.where)
     stds_arr = np.where(stds.values > 1e-8, stds.values, 1.0)
     stds_safe = pd.Series(stds_arr, index=stds.index)
     df_norm   = (df - means) / stds_safe
-    # FIX: rellenar NaN residuales que puedan aparecer tras normalización
     df_norm   = df_norm.fillna(0.0)
     return df_norm, means, stds_safe
 
@@ -409,10 +391,6 @@ def create_sequences_mv(features, target, seq_len):
 
 
 def train_model(model, X, y, epochs, pb, lr=0.005):
-    """
-    FIX: añade validación de NaN en loss para evitar entrenamiento silencioso roto.
-    Si loss es NaN en epoch 1, lanza error descriptivo.
-    """
     opt   = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=1e-5)
     sched = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=epochs)
     fn    = nn.HuberLoss()
@@ -423,7 +401,6 @@ def train_model(model, X, y, epochs, pb, lr=0.005):
         pred = model(X).squeeze()
         loss = fn(pred, y)
 
-        # FIX: detección temprana de NaN
         if torch.isnan(loss):
             raise RuntimeError(
                 f"NaN loss at epoch {e+1}. Probable cause: NaN in input tensors. "
@@ -440,25 +417,20 @@ def train_model(model, X, y, epochs, pb, lr=0.005):
 
 
 def predict_univariate(model, seed, n, m, s):
-    """
-    FIX: seed puede llegar como tensor 1D o 2D.
-    Normaliza siempre a (seq_len, 1) antes de procesar.
-    """
     model.eval()
     preds = []
-    cur = seed.view(-1, 1).clone()  # garantizado (seq_len, 1)
+    cur = seed.view(-1, 1).clone()
     with torch.no_grad():
         for _ in range(n):
-            inp = cur.unsqueeze(0)                          # (1, seq_len, 1)
+            inp = cur.unsqueeze(0)
             val = float(model(inp).item())
             preds.append(val)
             new_val = torch.tensor([[val]], dtype=cur.dtype)
-            cur = torch.cat([cur[1:], new_val], dim=0)     # (seq_len, 1)
+            cur = torch.cat([cur[1:], new_val], dim=0)
     return np.array(preds) * s + m
 
 
 def predict_multivariate(model, seed, n, target_m, target_s):
-    """seed shape: (seq_len, n_features)"""
     model.eval()
     preds = []
     cur = seed.clone()
@@ -487,7 +459,6 @@ def render_map(lat, lon, location_name=""):
     )
     map_df = pd.DataFrame({"lat": [lat], "lon": [lon]})
 
-    # FIX: use_container_width deprecado en Streamlit 1.44+ → usar width='stretch'
     try:
         st.map(map_df, zoom=5, width="stretch", height=260)
         return
@@ -499,7 +470,6 @@ def render_map(lat, lon, location_name=""):
     except Exception:
         pass
 
-    # Fallback iframe OSM
     bbox_pad = 2.5
     osm_url = (
         f"https://www.openstreetmap.org/export/embed.html"
@@ -515,7 +485,7 @@ def render_map(lat, lon, location_name=""):
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# Altair theme — FIX: usar alt.theme en lugar de alt.themes (deprecado 5.5+)
+# Altair theme
 # ══════════════════════════════════════════════════════════════════════════════
 _DARK_THEME_CFG = {
     "background": "#111120", "view": {"stroke": "transparent"},
@@ -529,12 +499,10 @@ _DARK_THEME_CFG = {
 }
 
 try:
-    # altair >= 5.5 — nueva API
     @alt.theme.register("sowi_dark", enable=True)
     def _sowi_dark():
         return alt.theme.ThemeConfig({"config": _DARK_THEME_CFG})
 except AttributeError:
-    # altair < 5.5 — API vieja (fallback)
     alt.themes.register("sowi_dark", lambda: {"config": _DARK_THEME_CFG})
     alt.themes.enable("sowi_dark")
 
@@ -543,10 +511,6 @@ except AttributeError:
 # Helpers de groupby compatibles con pandas 2.x y 3.x
 # ══════════════════════════════════════════════════════════════════════════════
 def groupby_hour(series: pd.Series) -> pd.Series:
-    """
-    FIX pandas 3.x: Series.groupby(index.hour) cambió comportamiento.
-    Usar DataFrame temporal para garantizar compatibilidad total.
-    """
     tmp = pd.DataFrame({"val": series.values, "hour": series.index.hour})
     return tmp.groupby("hour")["val"].mean()
 
@@ -608,7 +572,6 @@ def render_solar_dashboard(df, predictions, future_dates, lat):
     else:
         combined = pd.DataFrame({"Datetime": future_dates, "GHI": preds, "Type": "Forecast"})
 
-    # FIX: width='stretch' en lugar de use_container_width=True
     st.altair_chart(
         alt.Chart(combined).mark_line(strokeWidth=2).encode(
             x=alt.X("Datetime:T", title="Date / Time (local)"),
@@ -669,7 +632,6 @@ def render_solar_dashboard(df, predictions, future_dates, lat):
                         use_container_width=True)
 
     with t2:
-        # FIX pandas 3.x: usar groupby_hour en lugar de .groupby(df.index.hour)
         avg_by_h = pd2.groupby("Hour_num")["GHI"].mean().reset_index()
         avg_by_h.columns = ["Hour of day", "Avg GHI"]
         havg = (pd.DataFrame({"Hour of day": list(range(24))})
@@ -702,7 +664,6 @@ def render_solar_dashboard(df, predictions, future_dates, lat):
             st.info("No positive GHI values to display.")
 
     st.subheader("📋 Solar Hourly Profile")
-    # FIX pandas 3.x: usar groupby_hour helper
     hist_h = groupby_hour(df["shortwave_radiation"])
     pred_h = pd2.groupby("Hour_num")["GHI"].mean()
     sr, ss = solar_window(lat, future_dates[0] if future_dates else datetime.today())
@@ -836,7 +797,6 @@ def render_wind_dashboard(df, predictions, future_dates):
                         use_container_width=True)
 
     with t2:
-        # FIX pandas 3.x: groupby directo sobre columna del DataFrame
         avg_by_h = pd2.groupby("Hour_num")["WindSpeed"].mean().reset_index()
         avg_by_h.columns = ["Hour of day", "Avg Wind (m/s)"]
         havg = (pd.DataFrame({"Hour of day": list(range(24))})
@@ -860,7 +820,6 @@ def render_wind_dashboard(df, predictions, future_dates):
             ).properties(height=300).interactive(), use_container_width=True)
 
     st.subheader("📋 Wind Hourly Profile")
-    # FIX pandas 3.x: usar groupby_hour helper
     hist_h = groupby_hour(df["wind_speed_10m"])
     pred_h = pd2.groupby("Hour_num")["WindSpeed"].mean()
     rows = []
@@ -1022,7 +981,6 @@ with st.sidebar:
         "<div style='font-size:.7rem;text-transform:uppercase;letter-spacing:.1em;"
         "color:#44445a;margin-bottom:.5rem'>⚙️ Model Parameters</div>",
         unsafe_allow_html=True)
-    # FIX hiperparámetros: valores default optimizados para CPU de Streamlit Cloud
     seq_len = st.slider("Time window (hours)", 12, 72, 24,
                         help="24h = buen balance velocidad/varianza en CPU")
     epochs  = st.slider("Training epochs", 20, 150, 40,
@@ -1040,7 +998,6 @@ with st.sidebar:
         help="Standard: rápido · Day-Ahead: stacked LSTM 64→32→16 · Multivariable: features climáticas")
 
     pred_steps      = 48
-    # FIX: forzar modelo small (64,32,16) como default para evitar OOM en CPU
     da_hidden_sizes = (64, 32, 16)
     use_temp = use_humidity = use_wind_feat = use_cloud = False
 
@@ -1410,6 +1367,7 @@ if st.session_state.get("modelo_ejecutado"):
             st.session_state["df"], st.session_state["predictions"],
             st.session_state["future_dates"])
 
+    # ── CTA banner → Sowi AI (FIXED: direct st.switch_page, no sidebar message) ──
     sowi_color = "#f5b432" if res_et == "Solar" else "#22c55e"
     st.markdown(
         f"<div style='background:linear-gradient(135deg,rgba(245,180,50,.08),rgba(34,197,94,.06));"
@@ -1425,11 +1383,12 @@ if st.session_state.get("modelo_ejecutado"):
 
     _, cc, _ = st.columns([1, 2, 1])
     with cc:
-        if st.button("🤖 Go to Sowi AI →", type="primary", use_container_width=True):
-            try:
-                st.switch_page(_SOWI_AI_PAGE)
-            except Exception:
-                st.info("Navigate to **Sowi AI Analyst** from the sidebar.")
+        # ── FIXED: direct navigation via st.switch_page — no fallback message ──
+        st.page_link(
+            _SOWI_AI_PAGE,
+            label="🤖 Ask Sowi AI →",
+            use_container_width=True,
+        )
 
     st.markdown(
         "<div class='footer'>⚡ Renewable Energy Forecast &nbsp;·&nbsp; "
