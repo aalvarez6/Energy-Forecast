@@ -5,7 +5,24 @@ Fixed: pandas 3.x groupby, normalize_features, tensor shapes, altair theme,
        seed sequence NaN, default hyperparams, use_container_width deprecation
 """
 
-_SOWI_AI_PAGE = "pages/Sowi_AI_Analyst.py"
+# ── Navigation: set this to the exact path of your Sowi AI page ──
+# The path must match how Streamlit sees it: "pages/YOURFILE.py"
+# Based on your deployment the file is pages/SOWI.py — adjust if different.
+_SOWI_AI_PAGE = "pages/SOWI.py"   # ← adjust to your exact filename
+
+
+def _nav_to_sowi(label: str = "🤖 Ask Sowi AI →", key: str = "nav_sowi",
+                 use_container_width: bool = False):
+    """Robust navigation to Sowi AI page via st.switch_page."""
+    if st.button(label, type="primary", key=key, use_container_width=use_container_width):
+        try:
+            st.switch_page(_SOWI_AI_PAGE)
+        except Exception:
+            st.info(
+                f"Navigate to **Sowi AI** from the sidebar. "
+                f"(Tip: update `_SOWI_AI_PAGE` at the top of this file to match your exact filename — "
+                f"currently set to `{_SOWI_AI_PAGE}`.)"
+            )
 
 import streamlit as st
 import pandas as pd
@@ -1383,12 +1400,7 @@ if st.session_state.get("modelo_ejecutado"):
 
     _, cc, _ = st.columns([1, 2, 1])
     with cc:
-        # ── FIXED: direct navigation via st.switch_page — no fallback message ──
-        st.page_link(
-            _SOWI_AI_PAGE,
-            label="🤖 Ask Sowi AI →",
-            use_container_width=True,
-        )
+        _nav_to_sowi("🤖 Ask Sowi AI →", key="nav_sowi_cta", use_container_width=True)
 
     st.markdown(
         "<div class='footer'>⚡ Renewable Energy Forecast &nbsp;·&nbsp; "
