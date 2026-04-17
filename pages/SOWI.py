@@ -1,12 +1,15 @@
 """
 Sowi AI Analyst — pages/Sowi_AI_Analyst.py
 English version · solar & wind expert · dynamic prompts
-Fixed: page_link, API error handling, session state safety, model name
+Fixed: page_link direct nav, back-to-forecast button, API error handling,
+       session state safety, model name
 """
 
 import streamlit as st
 import numpy as np
 from datetime import datetime
+
+_FORECAST_PAGE = "Energy_Forecast.py"
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  PAGE CONFIG
@@ -46,8 +49,23 @@ html,body,[class*="css"] { font-family:var(--font) !important; }
 ::-webkit-scrollbar { width:4px; } ::-webkit-scrollbar-track { background:transparent; }
 ::-webkit-scrollbar-thumb { background:var(--bd-hi); border-radius:4px; }
 
+/* BACK BUTTON */
+.back-nav { margin-bottom: 1rem; }
+[data-testid="stPageLink"] a {
+    display:inline-flex !important; align-items:center !important; gap:6px !important;
+    background:var(--surface) !important; border:1px solid var(--bd-hi) !important;
+    color:var(--t2) !important; font-family:var(--font) !important;
+    font-size:.8rem !important; font-weight:500 !important;
+    border-radius:var(--pill) !important; padding:6px 14px !important;
+    text-decoration:none !important; transition:all .18s !important;
+}
+[data-testid="stPageLink"] a:hover {
+    background:var(--amber-dim) !important; border-color:rgba(245,180,50,.3) !important;
+    color:var(--amber) !important; transform:translateX(-2px) !important;
+}
+
 /* HERO */
-.hero { padding:3rem 0 2rem; text-align:center; position:relative; overflow:hidden; }
+.hero { padding:2rem 0 1.6rem; text-align:center; position:relative; overflow:hidden; }
 .hero::before { content:''; position:absolute; top:-60px; left:50%; transform:translateX(-50%);
     width:700px; height:260px;
     background:radial-gradient(ellipse,rgba(245,180,50,0.06) 0%,transparent 70%);
@@ -413,7 +431,7 @@ SMART BEHAVIOR
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-#  CLAUDE API — lazy import so missing key shows a clear error
+#  CLAUDE API
 # ══════════════════════════════════════════════════════════════════════════════
 
 def _call_sowi(system: str, history: list) -> str:
@@ -422,7 +440,6 @@ def _call_sowi(system: str, history: list) -> str:
     except ImportError:
         return "❌ <strong>anthropic</strong> package not installed. Run: <code>pip install anthropic</code>"
 
-    # Get API key from secrets
     try:
         api_key = st.secrets["ANTHROPIC_API_KEY"]
     except (KeyError, FileNotFoundError):
@@ -435,7 +452,7 @@ def _call_sowi(system: str, history: list) -> str:
     try:
         client = anthropic.Anthropic(api_key=api_key)
         r = client.messages.create(
-            model="claude-sonnet-4-5",   # FIX: correct model string
+            model="claude-sonnet-4-5",
             max_tokens=1400,
             system=system,
             messages=[{"role": m["role"], "content": m["content"]} for m in history],
@@ -659,6 +676,19 @@ def _render_sidebar(has_data: bool, energy_type: str):
         st.metric("Messages", len(st.session_state.get("sowi_history", [])))
         st.markdown("---")
 
+        # ── FIXED: direct navigation back to forecast ──
+        st.markdown(
+            "<div style='font-size:.7rem;text-transform:uppercase;letter-spacing:.1em;"
+            "color:#44445a;margin-bottom:.5rem'>🔗 Navigation</div>",
+            unsafe_allow_html=True)
+        st.page_link(
+            _FORECAST_PAGE,
+            label="⚡ Back to Forecast",
+            use_container_width=True,
+        )
+
+        st.markdown("---")
+
         if st.button("🗑️ New conversation", use_container_width=True):
             st.session_state["sowi_history"] = []
             st.session_state["_typing"]      = False
@@ -689,6 +719,14 @@ def main():
     energy_type = st.session_state.get("energy_type", "Solar")
 
     _render_sidebar(has_data, energy_type)
+
+    # ── FIXED: Back to Forecast button — top of page, always visible ──
+    st.markdown('<div class="back-nav">', unsafe_allow_html=True)
+    st.page_link(
+        _FORECAST_PAGE,
+        label="← Back to Forecast",
+    )
+    st.markdown('</div>', unsafe_allow_html=True)
 
     # Hero
     st.markdown("""
@@ -722,22 +760,12 @@ def main():
         st.markdown("<br>", unsafe_allow_html=True)
         _, cc, _ = st.columns([1, 2, 1])
         with cc:
-            # FIX: robust navigation button — works on all Streamlit versions
-            try:
-                st.page_link("Energy_Forecast.py", label="⚡ Go to Forecast →", use_container_width=True)
-            except Exception:
-                try:
-                    st.page_link("pages/../Energy_Forecast.py", label="⚡ Go to Forecast →", use_container_width=True)
-                except Exception:
-                    st.markdown(
-                        "<div style='text-align:center'>"
-                        "<a href='/' style='display:inline-block;padding:.5rem 1.5rem;"
-                        "background:rgba(245,180,50,.12);border:1px solid rgba(245,180,50,.35);"
-                        "color:#f5b432;border-radius:12px;font-weight:600;"
-                        "text-decoration:none;font-family:Sora,sans-serif'>"
-                        "⚡ Go to Forecast →</a></div>",
-                        unsafe_allow_html=True
-                    )
+            # ── FIXED: always direct st.page_link, no fallback needed ──
+            st.page_link(
+                _FORECAST_PAGE,
+                label="⚡ Go to Forecast →",
+                use_container_width=True,
+            )
         return
 
     # ── Load & validate forecast data ─────────────────────────────────────────
@@ -752,12 +780,10 @@ def main():
     lon          = float(st.session_state["lon"])
     modo         = st.session_state["modo"]
 
-    # Guard against empty predictions
     if preds is None or len(preds) == 0:
         st.error("⚠️ Forecast data is empty. Please run the forecast again.")
         st.stop()
 
-    # Compute years from date_start/date_end
     years = 2.0
     if "date_start" in st.session_state and "date_end" in st.session_state:
         try:
@@ -788,6 +814,23 @@ def main():
     # Build dynamic system prompt and render chat
     system = _build_expert_prompt(energy_type, preds, future_dates, lat, lon, years, modo)
     _render_chat(system)
+
+    # ── FIXED: Back to Forecast — bottom CTA ──
+    st.markdown(
+        "<div style='background:var(--surface);border:1px solid var(--bd);"
+        "border-radius:16px;padding:1.2rem 1.6rem;text-align:center;margin:1rem 0'>"
+        "<div style='font-size:.85rem;color:#8888a0;margin-bottom:.7rem'>"
+        "Done analyzing? Go back to run a new forecast.</div>"
+        "</div>",
+        unsafe_allow_html=True
+    )
+    _, cc2, _ = st.columns([1, 2, 1])
+    with cc2:
+        st.page_link(
+            _FORECAST_PAGE,
+            label="⚡ Back to Forecast",
+            use_container_width=True,
+        )
 
     st.markdown("""
     <div class="footer">
