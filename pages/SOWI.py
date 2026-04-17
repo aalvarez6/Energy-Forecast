@@ -37,7 +37,7 @@ st.set_page_config(
     page_title="Sowi · Energy Analyst",
     page_icon="🌞💨",
     layout="wide",
-    initial_sidebar_state="collapsed",
+    initial_sidebar_state="expanded",
 )
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -203,8 +203,50 @@ html,body,[class*="css"] { font-family:var(--font) !important; }
     box-shadow:0 0 16px var(--amber-glow) !important; transform:translateY(-1px) !important; }
 
 /* SIDEBAR */
-[data-testid="stSidebar"] { background:var(--bg2) !important; border-right:1px solid var(--bd) !important; }
-[data-testid="stSidebarContent"] { padding-top:1.5rem !important; }
+[data-testid="stSidebar"] { background:var(--bg2) !important; border-right:1px solid var(--bd) !important; min-width:260px !important; }
+[data-testid="stSidebarContent"] { padding:0 !important; }
+[data-testid="stSidebar"] * { font-family:var(--font) !important; }
+[data-testid="stSidebar"] .stButton>button {
+    background:var(--surface) !important; border:1px solid var(--bd-hi) !important;
+    color:var(--t2) !important; font-size:.8rem !important; font-weight:500 !important;
+    border-radius:var(--r) !important; width:100% !important; text-align:left !important;
+    padding:.55rem .85rem !important; transition:all .18s !important; }
+[data-testid="stSidebar"] .stButton>button:hover {
+    background:var(--amber-dim) !important; border-color:rgba(245,180,50,.3) !important;
+    color:var(--amber) !important; transform:translateX(3px) !important; }
+[data-testid="stSidebar"] .stButton>button[kind="primary"] {
+    background:linear-gradient(135deg,rgba(245,180,50,.18),rgba(245,180,50,.08)) !important;
+    border:1px solid rgba(245,180,50,.38) !important; color:var(--amber) !important;
+    font-weight:600 !important; text-align:center !important; transform:none !important; }
+[data-testid="stSidebar"] .stButton>button[kind="primary"]:hover {
+    box-shadow:0 0 14px var(--amber-glow) !important; transform:translateY(-1px) !important; }
+.sb-logo { text-align:center; padding:1.4rem 1rem 1rem; border-bottom:1px solid var(--bd); }
+.sb-section-lbl { font-size:.62rem; font-weight:700; letter-spacing:.13em; text-transform:uppercase;
+    color:var(--t3); padding:.9rem 1rem .4rem; }
+.sb-nav-item { display:flex; align-items:center; gap:9px; padding:.55rem 1rem;
+    font-size:.82rem; color:var(--t2); cursor:pointer; border-radius:var(--r);
+    margin:1px .5rem; transition:all .18s; text-decoration:none; }
+.sb-nav-item:hover { background:var(--amber-dim); color:var(--amber); }
+.sb-nav-item.active { background:var(--surface2); color:var(--amber);
+    border-left:2px solid var(--amber); }
+.sb-nav-icon { font-size:1rem; width:20px; text-align:center; flex-shrink:0; }
+.sb-forecast-card { margin:.5rem; background:var(--surface);
+    border:1px solid var(--bd); border-radius:var(--r); padding:.8rem .9rem; }
+.sb-forecast-card.solar { border-top:2px solid var(--amber); }
+.sb-forecast-card.wind  { border-top:2px solid #22c55e; }
+.sb-fc-title { font-size:.65rem; font-weight:700; letter-spacing:.1em; text-transform:uppercase;
+    color:var(--t3); margin-bottom:.6rem; }
+.sb-fc-row { display:flex; justify-content:space-between; align-items:center;
+    font-size:.74rem; padding:2px 0; }
+.sb-fc-lbl { color:var(--t3); }
+.sb-fc-val { font-weight:600; }
+.sb-fc-val.solar { color:var(--amber); }
+.sb-fc-val.wind  { color:#22c55e; }
+.sb-fc-val.neutral { color:var(--t2); }
+.sb-divider { height:1px; background:var(--bd); margin:.6rem 0; }
+.sb-tip { background:rgba(245,180,50,.05); border:1px solid rgba(245,180,50,.12);
+    border-radius:var(--r); margin:.5rem; padding:.65rem .8rem;
+    font-size:.7rem; color:var(--t3); line-height:1.6; }
 
 /* EMPTY STATE */
 .empty-state { text-align:center; padding:3.8rem 2rem; background:var(--bg1);
@@ -677,51 +719,177 @@ def _render_chat(system: str):
 #  SIDEBAR
 # ══════════════════════════════════════════════════════════════════════════════
 
+# ══════════════════════════════════════════════════════════════════════════════
+#  SIDEBAR
+# ══════════════════════════════════════════════════════════════════════════════
+
 def _render_sidebar(has_data: bool, energy_type: str):
     with st.sidebar:
+
+        # ── Logo / Brand ──────────────────────────────────────────────────────
         st.markdown("""
-        <div style='text-align:center;padding:.5rem 0 1.2rem'>
-          <div style='font-size:1.8rem;margin-bottom:4px'>🌞💨</div>
-          <div style='font-size:.84rem;font-weight:600;color:#eeeef4'>Sowi · AI Analyst</div>
-          <div style='font-size:.68rem;color:#44445a;margin-top:2px'>Solar + Wind · Open‑Meteo</div>
+        <div class="sb-logo">
+          <div style='font-size:2rem;margin-bottom:4px'>🌞💨</div>
+          <div style='font-size:.9rem;font-weight:700;color:#eeeef4;letter-spacing:-.02em'>
+            Sowi <span style='color:#f5b432'>AI</span> Analyst
+          </div>
+          <div style='font-size:.64rem;color:#44445a;margin-top:3px'>
+            Solar · Wind · Open-Meteo · Claude
+          </div>
         </div>""", unsafe_allow_html=True)
-        st.markdown("---")
+
+        # ── Navigation ────────────────────────────────────────────────────────
+        st.markdown('<div class="sb-section-lbl">🧭 Navigation</div>', unsafe_allow_html=True)
+
+        if st.button("⚡  Energy Forecast", key="nav_sb_forecast", use_container_width=True):
+            try:
+                st.switch_page(_FORECAST_PAGE)
+            except Exception:
+                st.toast(f"Open '{_FORECAST_PAGE}' from the sidebar menu.", icon="⚠️")
+
+        st.markdown(
+            '<div class="sb-nav-item active">'
+            '<span class="sb-nav-icon">🤖</span> Sowi AI Analyst'
+            '</div>',
+            unsafe_allow_html=True,
+        )
+
+        # ── Forecast connection status ─────────────────────────────────────────
+        st.markdown('<div class="sb-section-lbl">🔗 Forecast Connection</div>',
+                    unsafe_allow_html=True)
 
         if has_data:
-            st.success(f"✅ Forecast loaded  ({energy_type})")
+            # Pull all relevant context from session_state
+            preds        = st.session_state.get("predictions")
+            future_dates = st.session_state.get("future_dates", [])
+            lat          = st.session_state.get("lat", 0.0)
+            lon          = st.session_state.get("lon", 0.0)
+            modo         = st.session_state.get("modo", "—")
+            date_start   = st.session_state.get("date_start", "—")
+            date_end     = st.session_state.get("date_end", "—")
+            geo_name     = st.session_state.get("geo_name", "")
+
+            arr = np.clip(np.asarray(preds, dtype=float), 0, None) if preds is not None else np.zeros(1)
+
+            card_cls = "solar" if energy_type == "Solar" else "wind"
+            val_cls  = "solar" if energy_type == "Solar" else "wind"
+
+            if energy_type == "Solar":
+                stat1_lbl, stat1_val = "Avg GHI", f"{arr.mean():.1f} W/m²"
+                stat2_lbl, stat2_val = "Peak GHI", f"{arr.max():.1f} W/m²"
+                stat3_lbl, stat3_val = "Total energy", f"{arr.sum()/1000:.3f} kWh/m²"
+                stat4_lbl, stat4_val = "Prod. hours", f"{int((arr>50).sum())} h"
+            else:
+                rho = 1.225
+                pd_arr = 0.5 * rho * (arr ** 3)
+                stat1_lbl, stat1_val = "Avg speed", f"{arr.mean():.2f} m/s"
+                stat2_lbl, stat2_val = "Max speed", f"{arr.max():.2f} m/s"
+                stat3_lbl, stat3_val = "Avg power", f"{pd_arr.mean():.1f} W/m²"
+                stat4_lbl, stat4_val = "Forecast hrs", f"{len(arr)} h"
+
+            loc_label = (geo_name[:28] + "…") if len(geo_name) > 28 else geo_name
+            if not loc_label:
+                loc_label = f"{float(lat):.2f}°, {float(lon):.2f}°"
+
+            # compute years
+            years_str = "—"
+            try:
+                from datetime import datetime as _dt
+                _s = _dt.strptime(str(date_start), "%Y-%m-%d")
+                _e = _dt.strptime(str(date_end),   "%Y-%m-%d")
+                years_str = f"{round((_e - _s).days / 365.25, 1)} yr"
+            except Exception:
+                pass
+
+            st.markdown(f"""
+            <div class="sb-forecast-card {card_cls}">
+              <div class="sb-fc-title">✅ Forecast active · {energy_type}</div>
+              <div class="sb-fc-row">
+                <span class="sb-fc-lbl">📍 Location</span>
+                <span class="sb-fc-val neutral" title="{geo_name}">{loc_label}</span>
+              </div>
+              <div class="sb-fc-row">
+                <span class="sb-fc-lbl">🧠 Model</span>
+                <span class="sb-fc-val neutral">{modo}</span>
+              </div>
+              <div class="sb-fc-row">
+                <span class="sb-fc-lbl">📅 History</span>
+                <span class="sb-fc-val neutral">{years_str}</span>
+              </div>
+              <div class="sb-divider"></div>
+              <div class="sb-fc-row">
+                <span class="sb-fc-lbl">{stat1_lbl}</span>
+                <span class="sb-fc-val {val_cls}">{stat1_val}</span>
+              </div>
+              <div class="sb-fc-row">
+                <span class="sb-fc-lbl">{stat2_lbl}</span>
+                <span class="sb-fc-val {val_cls}">{stat2_val}</span>
+              </div>
+              <div class="sb-fc-row">
+                <span class="sb-fc-lbl">{stat3_lbl}</span>
+                <span class="sb-fc-val {val_cls}">{stat3_val}</span>
+              </div>
+              <div class="sb-fc-row">
+                <span class="sb-fc-lbl">{stat4_lbl}</span>
+                <span class="sb-fc-val neutral">{stat4_val}</span>
+              </div>
+            </div>""", unsafe_allow_html=True)
+
         else:
-            st.warning("⚠️ No active forecast")
+            st.markdown("""
+            <div class="sb-forecast-card">
+              <div class="sb-fc-title">⚠️ No forecast loaded</div>
+              <div style='font-size:.74rem;color:#44445a;line-height:1.6;margin-top:.3rem'>
+                Go to <b style='color:#f5b432'>Energy Forecast</b>, run the model,
+                then come back here — Sowi will automatically load your results.
+              </div>
+            </div>""", unsafe_allow_html=True)
 
-        st.metric("Messages", len(st.session_state.get("sowi_history", [])))
-        st.markdown("---")
+        # ── Chat controls ─────────────────────────────────────────────────────
+        st.markdown('<div class="sb-section-lbl">💬 Conversation</div>',
+                    unsafe_allow_html=True)
 
-        # ── FIXED: direct navigation back to forecast ──
+        n_msgs = len(st.session_state.get("sowi_history", []))
+        if n_msgs == 0:
+            _msg_label = "No messages yet."
+        elif n_msgs == 1:
+            _msg_label = "1 message in session."
+        else:
+            _msg_label = f"{n_msgs} messages in session."
         st.markdown(
-            "<div style='font-size:.7rem;text-transform:uppercase;letter-spacing:.1em;"
-            "color:#44445a;margin-bottom:.5rem'>🔗 Navigation</div>",
-            unsafe_allow_html=True)
-        _nav_to_forecast("⚡ Back to Forecast", key="nav_sidebar", use_container_width=True)
+            f"<div style='font-size:.74rem;color:#44445a;padding:.1rem 1rem .5rem'>{_msg_label}</div>",
+            unsafe_allow_html=True,
+        )
 
-        st.markdown("---")
-
-        if st.button("🗑️ New conversation", use_container_width=True):
+        if st.button("🗑️  Clear conversation", key="sb_clear_chat", use_container_width=True):
             st.session_state["sowi_history"] = []
             st.session_state["_typing"]      = False
             st.rerun()
 
-        st.markdown("---")
+        # ── Tip ───────────────────────────────────────────────────────────────
         st.markdown("""
-        <div style='font-size:.7rem;color:#44445a;line-height:1.65'>
-        <strong style='color:#8888a0'>Sowi can answer about:</strong><br>
-        · PV & wind system sizing<br>
-        · Energy production estimates<br>
-        · Resource quality analysis<br>
-        · Battery storage design<br>
-        · ROI, LCOE, payback<br>
-        · Hybrid solar‑wind systems<br>
-        · Global climate & wind patterns<br><br>
-        <strong style='color:#8888a0'>Active model:</strong><br>
-        claude-sonnet-4.5
+        <div class="sb-tip">
+          💡 <b style='color:#f5b432'>Pro tip:</b> Run the forecast first on the
+          <b>Energy Forecast</b> page, then ask Sowi to calculate panel sizing,
+          ROI, or battery storage — all based on your real data.
+        </div>""", unsafe_allow_html=True)
+
+        # ── About ─────────────────────────────────────────────────────────────
+        st.markdown('<div class="sb-section-lbl">ℹ️ About</div>', unsafe_allow_html=True)
+        st.markdown("""
+        <div style='font-size:.7rem;color:#44445a;line-height:1.7;padding:0 1rem .8rem'>
+          <b style='color:#8888a0'>Sowi can help with:</b><br>
+          · PV &amp; wind system sizing<br>
+          · Energy production estimates<br>
+          · Resource quality analysis<br>
+          · Battery storage design<br>
+          · ROI, LCOE &amp; payback period<br>
+          · Hybrid solar‑wind systems<br>
+          · Global climate &amp; wind patterns<br>
+          <br>
+          <b style='color:#8888a0'>Powered by:</b><br>
+          Claude Sonnet 4.5 · Open‑Meteo<br>
+          PyTorch LSTM · Sowi 🌊
         </div>""", unsafe_allow_html=True)
 
 
